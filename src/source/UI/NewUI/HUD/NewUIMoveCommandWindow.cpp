@@ -330,10 +330,8 @@ void SEASON3B::CNewUIMoveCommandWindow::SetStrifeMap()
 
 void SEASON3B::CNewUIMoveCommandWindow::SettingCanMoveMap()
 {
-    int a = gMapManager.WorldActive;
-
     DWORD iZen;
-    int iLevel, iReqLevel, iReqZen;
+    int iReqZen;
 
     auto li = m_listMoveInfoData.begin();
     for (int i = 0; i < m_iRenderEndTextIndex; i++, li++)
@@ -350,74 +348,10 @@ void SEASON3B::CNewUIMoveCommandWindow::SettingCanMoveMap()
         (*li)->_bCanMove = false;
         (*li)->_bSelected = false;
 
-        //	if( i < m_iRenderEndTextIndex-1 )	continue;
-
-        iLevel = CharacterAttribute->Level;
         iZen = CharacterMachine->Gold;
-        iReqLevel = (*li)->_ReqInfo.iReqLevel;
         iReqZen = (*li)->_ReqInfo.iReqZen;
 
-        if ((gCharacterManager.GetBaseClass(CharacterAttribute->Class) == CLASS_DARK || gCharacterManager.GetBaseClass(CharacterAttribute->Class) == CLASS_DARK_LORD
-            || gCharacterManager.GetBaseClass(CharacterAttribute->Class) == CLASS_RAGEFIGHTER)
-            && (iReqLevel != 400))
-        {
-            iReqLevel = int(float(iReqLevel) * 2.f / 3.f);
-        }
-
-        if (iLevel >= iReqLevel && (int)iZen >= iReqZen && (int)Hero->PK < PVP_MURDERER1)
-        {
-            ITEM* pEquipedRightRing = &CharacterMachine->Equipment[EQUIPMENT_RING_RIGHT];
-            ITEM* pEquipedLeftRing = &CharacterMachine->Equipment[EQUIPMENT_RING_LEFT];
-            ITEM* pEquipedHelper = &CharacterMachine->Equipment[EQUIPMENT_HELPER];
-            ITEM* pEquipedWing = &CharacterMachine->Equipment[EQUIPMENT_WING];
-
-            if (wcscmp((*li)->_ReqInfo.szMainMapName, I18N::Game::Icarus) == 0)
-            {
-                if (
-                    (
-                        pEquipedHelper->Type == ITEM_HORN_OF_FENRIR
-                        || pEquipedHelper->Type == ITEM_HORN_OF_DINORANT
-                        || pEquipedHelper->Type == ITEM_DARK_HORSE_ITEM
-                        || pEquipedWing->Type == ITEM_CAPE_OF_LORD
-                        || (pEquipedWing->Type >= ITEM_WING_OF_STORM && pEquipedWing->Type <= ITEM_WING_OF_DIMENSION)
-                        || (pEquipedWing->Type >= ITEM_WING && pEquipedWing->Type <= ITEM_WINGS_OF_DARKNESS)
-                        || (ITEM_WING + 130 <= pEquipedWing->Type && pEquipedWing->Type <= ITEM_WING + 134)
-                        || (pEquipedWing->Type >= ITEM_CAPE_OF_FIGHTER && pEquipedWing->Type <= ITEM_CAPE_OF_OVERRULE)
-                        || (pEquipedWing->Type == ITEM_WING + 135))
-                    && !(pEquipedHelper->Type == ITEM_HORN_OF_UNIRIA)
-                    && (g_ChangeRingMgr->CheckBanMoveIcarusMap(pEquipedRightRing->Type, pEquipedLeftRing->Type) == false)
-                    )
-                {
-                    (*li)->_bCanMove = true;
-                }
-                else
-                {
-                    (*li)->_bCanMove = false;
-                }
-            }
-            else if (wcsncmp((*li)->_ReqInfo.szMainMapName, I18N::Game::Atlans, wcslen(I18N::Game::Atlans)) == 0)
-            {
-                if (pEquipedHelper->Type == ITEM_HORN_OF_UNIRIA || pEquipedHelper->Type == ITEM_HORN_OF_DINORANT)
-                {
-                    (*li)->_bCanMove = false;
-                }
-                else
-                {
-                    (*li)->_bCanMove = true;
-                }
-            }
-            else if ((g_ServerListManager->IsNonPvP() == true) && (wcscmp((*li)->_ReqInfo.szMainMapName, I18N::Game::Vulcanus) == 0))
-            {
-                (*li)->_bCanMove = false;
-            }
-            else
-            {
-                (*li)->_bCanMove = true;
-            }
-        }
-
-        if ((*li)->_bCanMove && (*li)->_bStrife && 0 == Hero->m_byGensInfluence)
-            (*li)->_bCanMove = false;
+        (*li)->_bCanMove = (int)iZen >= iReqZen;
     }
 }
 
