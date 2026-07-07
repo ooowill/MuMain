@@ -79,10 +79,10 @@ extern int AllRepairGold;
 //////////////////////////////////////////////////////////////////////////
 // text ฐüทร
 //////////////////////////////////////////////////////////////////////////
-extern wchar_t TextList[50][100];
-extern int TextListColor[50];
-extern int TextBold[50];
-extern SIZE Size[50];
+extern wchar_t TextList[64][100];
+extern int TextListColor[64];
+extern int TextBold[64];
+extern SIZE Size[64];
 
 ///////////////////////////////////////////////////////////////////////////////
 // party
@@ -178,6 +178,7 @@ bool GetAttackDamage(int* iMinDamage, int* iMaxDamage);
 void GetItemName(int iType, int iLevel, wchar_t* Text);
 std::wstring GetItemDisplayName(ITEM* pItem);
 void GetSpecialOptionText(int Type, wchar_t* Text, WORD Option, BYTE Value, int iMana);
+int AppendItemEvolutionTooltip(const ITEM* ip, int textNum, int& skipNum);
 void RenderItemInfo(int sx, int sy, ITEM* ip, bool Sell, int Inventype = 0, bool bItemTextListBoxUse = false);
 void RenderRepairInfo(int sz, int sy, ITEM* ip, bool Sell);
 void RenderSkillInfo(int sx, int sy, int Type, int SkillNum = 0, int iRenderPoint = STRP_NONE);
@@ -194,6 +195,8 @@ bool IsStoreBan(ITEM* pItem);
 bool IsSellingBan(ITEM* pItem);
 bool IsRepairBan(ITEM* pItem);
 bool IsWingItem(ITEM* pItem);
+bool IsCustomJewelItemType(int itemType);
+bool IsCustomJewelTargetType(int itemType);
 bool IsJewelItem(ITEM* pItem);
 bool IsExcellentItem(ITEM* pItem);
 bool IsAncientItem(ITEM* pItem);

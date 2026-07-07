@@ -42,7 +42,12 @@
 #include "World/MapInfra/PortalMgr.h"
 #include "UI/NewUI/NewUISystem.h"
 #include "Network/Server/ServerListManager.h"
+#include "Character/ItemEvolutionClient.h"
+#include "Character/AzothClient.h"
 #include <algorithm>
+#include <cstdarg>
+#include <cwchar>
+#include <iterator>
 #include <time.h>
 #include <unordered_map>
 #include <unordered_set>
@@ -88,6 +93,649 @@ int g_iPersonalShopMsgType = 0;
 wchar_t g_szPersonalShopTitle[MAX_SHOPTITLE + 1] = { 0, };
 
 CHARACTER g_PersonalShopSeller;
+
+namespace
+{
+    constexpr int kItemEvolutionTooltipLineLimit = 64;
+    constexpr wchar_t kTooltipPurpleStart = L'\xE000';
+    constexpr wchar_t kTooltipPurpleEnd = L'\xE001';
+
+    enum class ItemEvolutionKind
+    {
+        None,
+        Weapon,
+        Defense,
+        WingOrCape,
+        Pendant,
+        Ring,
+        Mount,
+    };
+
+    bool IsValidItemType(int itemType)
+    {
+        return itemType >= 0 && itemType < MAX_ITEM;
+    }
+
+    int Max3(int first, int second, int third)
+    {
+        return std::max(first, std::max(second, third));
+    }
+
+    bool IsItemEvolutionWingOrCape(const ITEM* item)
+    {
+        return (item->Type >= ITEM_WINGS_OF_SPIRITS && item->Type <= ITEM_WINGS_OF_DARKNESS)
+            || item->Type == ITEM_CAPE_OF_LORD
+            || (item->Type >= ITEM_WING_OF_STORM && item->Type <= ITEM_CAPE_OF_EMPEROR)
+            || (item->Type >= ITEM_WINGS_OF_DESPAIR && item->Type <= ITEM_WING_OF_DIMENSION)
+            || (item->Type >= ITEM_CAPE_OF_FIGHTER && item->Type <= ITEM_CAPE_OF_OVERRULE);
+    }
+
+    bool IsItemEvolutionMount(const ITEM* item)
+    {
+        return item->Type == ITEM_HORN_OF_UNIRIA
+            || item->Type == ITEM_HORN_OF_DINORANT
+            || item->Type == ITEM_DARK_HORSE_ITEM
+            || item->Type == ITEM_HORN_OF_FENRIR
+            || item->Type == ITEM_PET_UNICORN;
+    }
+
+    bool IsItemEvolutionPendant(const ITEM* item)
+    {
+        return item->Type == ITEM_PENDANT_OF_LIGHTING
+            || item->Type == ITEM_PENDANT_OF_FIRE
+            || item->Type == ITEM_PENDANT_OF_ICE
+            || item->Type == ITEM_PENDANT_OF_WIND
+            || item->Type == ITEM_PENDANT_OF_WATER
+            || item->Type == ITEM_PENDANT_OF_ABILITY
+            || item->Type == ITEM_MOONSTONE_PENDANT;
+    }
+
+    bool IsItemEvolutionRing(const ITEM* item)
+    {
+        return item->Type == ITEM_RING_OF_ICE
+            || item->Type == ITEM_RING_OF_POISON
+            || item->Type == ITEM_WIZARDS_RING
+            || item->Type == ITEM_RING_OF_FIRE
+            || item->Type == ITEM_RING_OF_EARTH
+            || item->Type == ITEM_RING_OF_WIND
+            || item->Type == ITEM_RING_OF_MAGIC
+            || item->Type == ITEM_ELITE_TRANSFER_SKELETON_RING
+            || item->Type == ITEM_JACK_OLANTERN_TRANSFORMATION_RING
+            || item->Type == ITEM_CHRISTMAS_TRANSFORMATION_RING
+            || item->Type == ITEM_GAME_MASTER_TRANSFORMATION_RING
+            || item->Type == ITEM_SNOWMAN_TRANSFORMATION_RING
+            || item->Type == ITEM_PANDA_TRANSFORMATION_RING
+            || item->Type == ITEM_SKELETON_TRANSFORMATION_RING
+            || item->Type == ITEM_TRANSFORMATION_RING1
+            || item->Type == ITEM_TRANSFORMATION_RING2
+            || item->Type == ITEM_TRANSFORMATION_RING3;
+    }
+
+    bool IsItemEvolutionDefense(const ITEM* item)
+    {
+        return (item->Type >= ITEM_SHIELD && item->Type < ITEM_WING)
+            || item->Type == ITEM_ARMOR_OF_GUARDSMAN;
+    }
+
+    bool IsItemEvolutionWeapon(const ITEM* item)
+    {
+        if (item->Type < ITEM_SWORD || item->Type >= ITEM_SHIELD)
+        {
+            return false;
+        }
+
+        return item->DamageMin > 0 || item->DamageMax > 0 || item->MagicPower > 0;
+    }
+
+    ItemEvolutionKind GetItemEvolutionKind(const ITEM* item)
+    {
+        if (item == nullptr || !IsValidItemType(item->Type))
+        {
+            return ItemEvolutionKind::None;
+        }
+
+        if (IsItemEvolutionMount(item))
+        {
+            return ItemEvolutionKind::Mount;
+        }
+
+        if (IsItemEvolutionWingOrCape(item))
+        {
+            return ItemEvolutionKind::WingOrCape;
+        }
+
+        if (IsItemEvolutionPendant(item))
+        {
+            return ItemEvolutionKind::Pendant;
+        }
+
+        if (IsItemEvolutionRing(item))
+        {
+            return ItemEvolutionKind::Ring;
+        }
+
+        if (IsItemEvolutionDefense(item))
+        {
+            return ItemEvolutionKind::Defense;
+        }
+
+        if (IsItemEvolutionWeapon(item))
+        {
+            return ItemEvolutionKind::Weapon;
+        }
+
+        return ItemEvolutionKind::None;
+    }
+
+    int GetItemEvolutionBaseValue(const ITEM* item, ItemEvolutionKind kind)
+    {
+        switch (kind)
+        {
+        case ItemEvolutionKind::Weapon:
+            return Max3(item->DamageMin, item->DamageMax, item->MagicPower);
+        case ItemEvolutionKind::Defense:
+            return item->Defense;
+        case ItemEvolutionKind::Mount:
+            return Max3(item->DamageMin, item->DamageMax, ItemAttribute[item->Type].Level);
+        default:
+            return 0;
+        }
+    }
+
+    int CalculateItemEvolutionPercentBonus(int baseValue, int percentPerWipe, int wipeCount)
+    {
+        if (baseValue <= 0 || wipeCount <= 0)
+        {
+            return 0;
+        }
+
+        return std::max(1, (baseValue * percentPerWipe * wipeCount + 50) / 100);
+    }
+
+    bool IsTooltipColorMarker(wchar_t ch)
+    {
+        return ch == kTooltipPurpleStart || ch == kTooltipPurpleEnd;
+    }
+
+    void CopyTooltipPlainText(wchar_t* destination, size_t destinationLength, const wchar_t* source)
+    {
+        if (destination == nullptr || destinationLength == 0)
+        {
+            return;
+        }
+
+        destination[0] = L'\0';
+        if (source == nullptr)
+        {
+            return;
+        }
+
+        size_t writeIndex = 0;
+        for (const wchar_t* cursor = source; *cursor != L'\0' && writeIndex + 1 < destinationLength; ++cursor)
+        {
+            if (!IsTooltipColorMarker(*cursor))
+            {
+                destination[writeIndex++] = *cursor;
+            }
+        }
+
+        destination[writeIndex] = L'\0';
+    }
+
+    bool ExtractTooltipPurpleSegment(
+        const wchar_t* source,
+        wchar_t* plain,
+        size_t plainLength,
+        wchar_t* prefix,
+        size_t prefixLength,
+        wchar_t* purple,
+        size_t purpleLength)
+    {
+        if (plain != nullptr && plainLength > 0)
+        {
+            plain[0] = L'\0';
+        }
+        if (prefix != nullptr && prefixLength > 0)
+        {
+            prefix[0] = L'\0';
+        }
+        if (purple != nullptr && purpleLength > 0)
+        {
+            purple[0] = L'\0';
+        }
+
+        if (source == nullptr)
+        {
+            return false;
+        }
+
+        bool insidePurple = false;
+        bool hasPurpleSegment = false;
+        size_t plainWrite = 0;
+        size_t prefixWrite = 0;
+        size_t purpleWrite = 0;
+
+        for (const wchar_t* cursor = source; *cursor != L'\0'; ++cursor)
+        {
+            if (*cursor == kTooltipPurpleStart)
+            {
+                insidePurple = true;
+                hasPurpleSegment = true;
+                continue;
+            }
+
+            if (*cursor == kTooltipPurpleEnd)
+            {
+                insidePurple = false;
+                continue;
+            }
+
+            if (plain != nullptr && plainWrite + 1 < plainLength)
+            {
+                plain[plainWrite++] = *cursor;
+            }
+
+            if (!hasPurpleSegment && prefix != nullptr && prefixWrite + 1 < prefixLength)
+            {
+                prefix[prefixWrite++] = *cursor;
+            }
+
+            if (insidePurple && purple != nullptr && purpleWrite + 1 < purpleLength)
+            {
+                purple[purpleWrite++] = *cursor;
+            }
+        }
+
+        if (plain != nullptr && plainLength > 0)
+        {
+            plain[plainWrite] = L'\0';
+        }
+        if (prefix != nullptr && prefixLength > 0)
+        {
+            prefix[prefixWrite] = L'\0';
+        }
+        if (purple != nullptr && purpleLength > 0)
+        {
+            purple[purpleWrite] = L'\0';
+        }
+
+        return hasPurpleSegment && purpleWrite > 0;
+    }
+
+    void BuildTooltipHighlightedNumberLine(
+        wchar_t* buffer,
+        size_t bufferLength,
+        const wchar_t* label,
+        const wchar_t* valueText)
+    {
+        _snwprintf_s(
+            buffer,
+            bufferLength,
+            _TRUNCATE,
+            L"%ls: %lc%ls%lc",
+            label,
+            kTooltipPurpleStart,
+            valueText,
+            kTooltipPurpleEnd);
+    }
+
+    void BuildTooltipDamageRangeLine(
+        wchar_t* buffer,
+        size_t bufferLength,
+        const wchar_t* label,
+        int minDamage,
+        int maxDamage,
+        bool highlightValue)
+    {
+        if (!highlightValue)
+        {
+            _snwprintf_s(buffer, bufferLength, _TRUNCATE, L"%ls: %d ~ %d", label, minDamage, maxDamage);
+            return;
+        }
+
+        wchar_t valueText[32]{};
+        _snwprintf_s(valueText, sizeof(valueText) / sizeof(valueText[0]), _TRUNCATE, L"%d ~ %d", minDamage, maxDamage);
+        BuildTooltipHighlightedNumberLine(buffer, bufferLength, label, valueText);
+    }
+
+    void BuildTooltipHighlightedIntegerFormatLine(
+        wchar_t* buffer,
+        size_t bufferLength,
+        const wchar_t* format,
+        int value)
+    {
+        if (buffer == nullptr || bufferLength == 0)
+        {
+            return;
+        }
+
+        buffer[0] = L'\0';
+        if (format == nullptr)
+        {
+            return;
+        }
+
+        const wchar_t* valueMarker = wcsstr(format, L"%d");
+        if (valueMarker == nullptr)
+        {
+            _snwprintf_s(buffer, bufferLength, _TRUNCATE, format, value);
+            return;
+        }
+
+        const int prefixLength = static_cast<int>(valueMarker - format);
+        const wchar_t* suffix = valueMarker + 2;
+        _snwprintf_s(
+            buffer,
+            bufferLength,
+            _TRUNCATE,
+            L"%.*ls%lc%d%lc%ls",
+            prefixLength,
+            format,
+            kTooltipPurpleStart,
+            value,
+            kTooltipPurpleEnd,
+            suffix);
+    }
+
+    void RenderTooltipTextWithInlinePurple(
+        float x,
+        float y,
+        const wchar_t* markedText,
+        float width,
+        int sort,
+        SIZE* textSize)
+    {
+        wchar_t plain[100]{};
+        wchar_t prefix[100]{};
+        wchar_t purple[100]{};
+        const bool hasPurpleSegment = ExtractTooltipPurpleSegment(
+            markedText,
+            plain,
+            sizeof(plain) / sizeof(plain[0]),
+            prefix,
+            sizeof(prefix) / sizeof(prefix[0]),
+            purple,
+            sizeof(purple) / sizeof(purple[0]));
+
+        g_pRenderText->RenderText(x, y, plain, width, 0, sort, textSize);
+
+        if (!hasPurpleSegment)
+        {
+            return;
+        }
+
+        SIZE plainSize{};
+        SIZE prefixSize{};
+        GetTextExtentPoint32(g_pRenderText->GetFontDC(), plain, lstrlen(plain), &plainSize);
+        GetTextExtentPoint32(g_pRenderText->GetFontDC(), prefix, lstrlen(prefix), &prefixSize);
+
+        float offsetPixels = static_cast<float>(prefixSize.cx);
+        const float boxWidthPixels = width * g_fScreenRate_x;
+        if (width > 0.0f && sort == RT3_SORT_CENTER && plainSize.cx < boxWidthPixels)
+        {
+            offsetPixels += (boxWidthPixels - plainSize.cx) / 2.0f;
+        }
+        else if (width > 0.0f && sort == RT3_SORT_RIGHT && plainSize.cx < boxWidthPixels)
+        {
+            offsetPixels += boxWidthPixels - plainSize.cx;
+        }
+
+        g_pRenderText->SetTextColor(0xffffffff);
+        g_pRenderText->SetBgColor(0);
+        glColor3f(1.f, 0.1f, 1.f);
+        SIZE ignoredSize{};
+        g_pRenderText->RenderText(
+            x + offsetPixels / g_fScreenRate_x,
+            y,
+            purple,
+            0,
+            0,
+            RT3_SORT_LEFT,
+            &ignoredSize);
+    }
+
+    int GetItemEvolutionWipeCount(const ITEM* item);
+    int GetWeaponKillDamageBonusTenths(const ITEM* item);
+
+    int GetItemEvolutionWeaponDisplayDamageBonus(const ITEM* item)
+    {
+        if (GetItemEvolutionKind(item) != ItemEvolutionKind::Weapon)
+        {
+            return 0;
+        }
+
+        const int wipeCount = GetItemEvolutionWipeCount(item);
+        const int wipeDamageBonus = CalculateItemEvolutionPercentBonus(GetItemEvolutionBaseValue(item, ItemEvolutionKind::Weapon), 10, wipeCount);
+        const int killDamageBonus = GetWeaponKillDamageBonusTenths(item) / 10;
+        return std::max(0, wipeDamageBonus) + std::max(0, killDamageBonus);
+    }
+
+    int GetItemEvolutionDefenseDisplayBonus(const ITEM* item)
+    {
+        if (GetItemEvolutionKind(item) != ItemEvolutionKind::Defense)
+        {
+            return 0;
+        }
+
+        return std::max(0, CalculateItemEvolutionPercentBonus(GetItemEvolutionBaseValue(item, ItemEvolutionKind::Defense), 10, GetItemEvolutionWipeCount(item)));
+    }
+
+    int GetItemEvolutionMountDisplayDamageBonus(const ITEM* item)
+    {
+        if (GetItemEvolutionKind(item) != ItemEvolutionKind::Mount)
+        {
+            return 0;
+        }
+
+        return std::max(0, CalculateItemEvolutionPercentBonus(GetItemEvolutionBaseValue(item, ItemEvolutionKind::Mount), 5, GetItemEvolutionWipeCount(item)));
+    }
+
+    int GetItemEvolutionWipeCount(const ITEM* item)
+    {
+        return ItemEvolutionClient::GetWipeCount(item);
+    }
+
+    int GetItemEvolutionProgressPercent(const ITEM* item)
+    {
+        return ItemEvolutionClient::GetProgressPercent(item);
+    }
+
+    int GetWeaponKillCount(const ITEM* item)
+    {
+        return ItemEvolutionClient::GetWeaponKillCount(item);
+    }
+
+    int GetWeaponKillDamageBonusTenths(const ITEM* item)
+    {
+        return ItemEvolutionClient::GetWeaponKillDamageBonusTenths(item);
+    }
+
+    void BuildWeaponKillDamageBonusText(wchar_t* buffer, size_t bufferLength, int damageBonusTenths)
+    {
+        damageBonusTenths = std::max(0, damageBonusTenths);
+        const int whole = damageBonusTenths / 10;
+        const int tenth = damageBonusTenths % 10;
+        if (tenth == 0)
+        {
+            _snwprintf_s(buffer, bufferLength, _TRUNCATE, L"%d", whole);
+            return;
+        }
+
+        _snwprintf_s(buffer, bufferLength, _TRUNCATE, L"%d.%d", whole, tenth);
+    }
+
+    void AppendItemEvolutionLine(int& textNum, int color, bool bold, const wchar_t* format, ...)
+    {
+        if (textNum >= kItemEvolutionTooltipLineLimit)
+        {
+            return;
+        }
+
+        TextListColor[textNum] = color;
+        TextBold[textNum] = bold;
+
+        va_list args;
+        va_start(args, format);
+        _vsnwprintf_s(TextList[textNum], 100, _TRUNCATE, format, args);
+        va_end(args);
+
+        ++textNum;
+    }
+
+    void AppendItemEvolutionEmptyLine(int& textNum, int& skipNum)
+    {
+        AppendItemEvolutionLine(textNum, TEXT_COLOR_WHITE, false, L"\n");
+        ++skipNum;
+    }
+
+    struct CustomJewelTooltipDefinition
+    {
+        int Type;
+        const wchar_t* EffectText;
+    };
+
+    const CustomJewelTooltipDefinition* FindCustomJewelTooltipDefinition(int itemType)
+    {
+        static constexpr CustomJewelTooltipDefinition CustomJewels[] =
+        {
+            { ITEM_POTION + 200, L"Coloca o item diretamente no +6." },
+            { ITEM_POTION + 201, L"Coloca o item diretamente no +9." },
+            { ITEM_POTION + 202, L"Adiciona option +28 ao item." },
+            { ITEM_POTION + 203, L"Troca as options excellent existentes." },
+            { ITEM_POTION + 204, L"Adiciona luck ao item." },
+            { ITEM_POTION + 205, L"Adiciona skill ao item compativel." },
+            { ITEM_POTION + 206, L"Coloca o item diretamente no +15." },
+            { ITEM_POTION + 207, L"Deixa o item Full Option." },
+            { ITEM_POTION + 208, L"Adiciona um socket extra vazio." },
+            { ITEM_POTION + 209, L"Durabilidade infinita, sem reparar." },
+            { ITEM_POTION + 210, L"Transforma em ancient, se existir set." },
+            { ITEM_POTION + 211, L"Transforma em excellent com uma option." },
+        };
+
+        for (const CustomJewelTooltipDefinition& jewel : CustomJewels)
+        {
+            if (jewel.Type == itemType)
+            {
+                return &jewel;
+            }
+        }
+
+        return nullptr;
+    }
+
+    int AppendCustomJewelTooltip(int itemType, int textNum, int& skipNum)
+    {
+        const CustomJewelTooltipDefinition* jewel = FindCustomJewelTooltipDefinition(itemType);
+        if (jewel == nullptr || textNum >= kItemEvolutionTooltipLineLimit - 3)
+        {
+            return textNum;
+        }
+
+        AppendItemEvolutionLine(textNum, TEXT_COLOR_BLUE, false, L"%ls", jewel->EffectText);
+        AppendItemEvolutionLine(textNum, TEXT_COLOR_GRAY, false, L"Arraste sobre um item compativel.");
+        AppendItemEvolutionEmptyLine(textNum, skipNum);
+        return textNum;
+    }
+
+    int AppendWeaponKillCounterTooltip(const ITEM* item, int textNum)
+    {
+        if (!IsItemEvolutionWeapon(item) || textNum >= kItemEvolutionTooltipLineLimit)
+        {
+            return textNum;
+        }
+
+        wchar_t damageBonusText[32]{};
+        BuildWeaponKillDamageBonusText(
+            damageBonusText,
+            sizeof(damageBonusText) / sizeof(damageBonusText[0]),
+            GetWeaponKillDamageBonusTenths(item));
+
+        AppendItemEvolutionLine(
+            textNum,
+            TEXT_COLOR_GREEN,
+            false,
+            L"Kills: %d | Dano +%ls",
+            std::max(0, GetWeaponKillCount(item)),
+            damageBonusText);
+        return textNum;
+    }
+
+    void BuildItemEvolutionProgressText(wchar_t* buffer, size_t bufferLength, int progressPercent)
+    {
+        constexpr int progressSlots = 18;
+        progressPercent = std::max(0, std::min(100, progressPercent));
+        const int filledSlots = progressPercent * progressSlots / 100;
+
+        wchar_t slots[progressSlots + 1]{};
+        for (int index = 0; index < progressSlots; ++index)
+        {
+            slots[index] = index < filledSlots ? L'#' : L'-';
+        }
+
+        _snwprintf_s(buffer, bufferLength, _TRUNCATE, L"[%ls] %d%%", slots, progressPercent);
+    }
+}
+
+int AppendItemEvolutionTooltip(const ITEM* ip, int textNum, int& skipNum)
+{
+    const ItemEvolutionKind kind = GetItemEvolutionKind(ip);
+    if (kind == ItemEvolutionKind::None || textNum >= kItemEvolutionTooltipLineLimit - 7)
+    {
+        return textNum;
+    }
+
+    const int wipeCount = GetItemEvolutionWipeCount(ip);
+    const int progressPercent = GetItemEvolutionProgressPercent(ip);
+    const int baseValue = GetItemEvolutionBaseValue(ip, kind);
+
+    wchar_t progressText[64]{};
+    BuildItemEvolutionProgressText(progressText, sizeof(progressText) / sizeof(progressText[0]), progressPercent);
+
+    AppendItemEvolutionEmptyLine(textNum, skipNum);
+    AppendItemEvolutionLine(textNum, TEXT_COLOR_GREEN_BLUE, true, L"Evolucao do Item");
+    AppendItemEvolutionLine(textNum, TEXT_COLOR_WHITE, false, L"%d%% para evoluir nesse Wipe", progressPercent);
+    AppendItemEvolutionLine(textNum, TEXT_COLOR_BLUE, false, L"%ls", progressText);
+    AppendItemEvolutionLine(textNum, TEXT_COLOR_PURPLE, false, L"Contagem de Wipes: %d", wipeCount);
+
+    switch (kind)
+    {
+    case ItemEvolutionKind::Weapon:
+        AppendItemEvolutionLine(textNum, TEXT_COLOR_GREEN, false, L"Bonus de Evolucao: Dano +%d", CalculateItemEvolutionPercentBonus(baseValue, 10, wipeCount));
+        break;
+    case ItemEvolutionKind::Defense:
+        AppendItemEvolutionLine(textNum, TEXT_COLOR_GREEN, false, L"Bonus de Evolucao: Defesa +%d", CalculateItemEvolutionPercentBonus(baseValue, 10, wipeCount));
+        break;
+    case ItemEvolutionKind::WingOrCape:
+        AppendItemEvolutionLine(textNum, TEXT_COLOR_GREEN, false, L"Bonus de Evolucao: Critico +%d%%", wipeCount * 3);
+        break;
+    case ItemEvolutionKind::Pendant:
+        AppendItemEvolutionLine(textNum, TEXT_COLOR_GREEN, false, L"Bonus de Evolucao: Mana/SD +%d%%", wipeCount * 2);
+        break;
+    case ItemEvolutionKind::Ring:
+        AppendItemEvolutionLine(textNum, TEXT_COLOR_GREEN, false, L"Bonus de Evolucao: Vida/AG +%d%%", wipeCount);
+        break;
+    case ItemEvolutionKind::Mount:
+        AppendItemEvolutionLine(textNum, TEXT_COLOR_GREEN, false, L"Bonus de Evolucao: Dano +%d / Critico +%d%%", CalculateItemEvolutionPercentBonus(baseValue, 5, wipeCount), wipeCount * 5);
+        break;
+    default:
+        break;
+    }
+
+    return textNum;
+}
+bool IsCustomJewelItemType(int itemType)
+{
+    return itemType >= ITEM_POTION + 200 && itemType <= ITEM_POTION + 211;
+}
+
+bool IsCustomJewelTargetType(int itemType)
+{
+    return itemType >= ITEM_SWORD
+        && itemType < ITEM_POTION
+        && itemType != ITEM_BOLT
+        && itemType != ITEM_ARROWS;
+}
+
 bool g_bIsTooltipOn = false;
 
 int   CheckSkill = -1;
@@ -195,13 +843,15 @@ int getLevelGeneration(int level, unsigned int* color)
     return lvl;
 }
 
-wchar_t TextList[50][100];
-int  TextListColor[50];
-int  TextBold[50];
-SIZE Size[50];
+wchar_t TextList[64][100];
+int  TextListColor[64];
+int  TextBold[64];
+SIZE Size[64];
 
 int RenderTextList(int sx, int sy, int TextNum, int Tab, int iSort = RT3_SORT_CENTER)
 {
+    TextNum = std::min(TextNum, kItemEvolutionTooltipLineLimit);
+
     int TextWidth = 0;
     float fsy = sy;
     for (int i = 0; i < TextNum; i++)
@@ -215,7 +865,9 @@ int RenderTextList(int sx, int sy, int TextNum, int Tab, int iSort = RT3_SORT_CE
             g_pRenderText->SetFont(g_hFont);
         }
 
-        GetTextExtentPoint32(g_pRenderText->GetFontDC(), TextList[i], lstrlen(TextList[i]), &Size[i]);
+        wchar_t plainText[100]{};
+        CopyTooltipPlainText(plainText, sizeof(plainText) / sizeof(plainText[0]), TextList[i]);
+        GetTextExtentPoint32(g_pRenderText->GetFontDC(), plainText, lstrlen(plainText), &Size[i]);
 
         if (TextWidth < Size[i].cx)
         {
@@ -293,7 +945,7 @@ int RenderTextList(int sx, int sy, int TextNum, int Tab, int iSort = RT3_SORT_CE
             g_pRenderText->SetFont(g_hFont);
         }
         SIZE TextSize;
-        g_pRenderText->RenderText(sx, fsy, TextList[i], TextWidth + Tab, 0, iSort, &TextSize);
+        RenderTooltipTextWithInlinePurple(sx, fsy, TextList[i], TextWidth + Tab, iSort, &TextSize);
         fsy += TextSize.cy;
     }
     return TextWidth + Tab;
@@ -301,6 +953,8 @@ int RenderTextList(int sx, int sy, int TextNum, int Tab, int iSort = RT3_SORT_CE
 
 void RenderTipTextList(const int sx, const int sy, int TextNum, int Tab, int iSort, int iRenderPoint, BOOL bUseBG)
 {
+    TextNum = std::min(TextNum, kItemEvolutionTooltipLineLimit);
+
     SIZE TextSize = { 0, 0 };
     int TextLine = 0; int EmptyLine = 0;
     float fWidth = 0; float fHeight = 0;
@@ -321,7 +975,9 @@ void RenderTipTextList(const int sx, const int sy, int TextNum, int Tab, int iSo
             g_pRenderText->SetFont(g_hFont);
         }
 
-        GetTextExtentPoint32(g_pRenderText->GetFontDC(), TextList[i], lstrlen(TextList[i]), &TextSize);
+        wchar_t plainText[100]{};
+        CopyTooltipPlainText(plainText, sizeof(plainText) / sizeof(plainText[0]), TextList[i]);
+        GetTextExtentPoint32(g_pRenderText->GetFontDC(), plainText, lstrlen(plainText), &TextSize);
 
         if (fWidth < TextSize.cx)
             fWidth = TextSize.cx;
@@ -392,7 +1048,9 @@ void RenderTipTextList(const int sx, const int sy, int TextNum, int Tab, int iSo
         float fHeight = 0;
         if (TextList[i][0] == 0x0a || (TextList[i][0] == ' ' && TextList[i][1] == 0x00))
         {
-            GetTextExtentPoint32(g_pRenderText->GetFontDC(), TextList[i], lstrlen(TextList[i]), &TextSize);
+            wchar_t plainText[100]{};
+            CopyTooltipPlainText(plainText, sizeof(plainText) / sizeof(plainText[0]), TextList[i]);
+            GetTextExtentPoint32(g_pRenderText->GetFontDC(), plainText, lstrlen(plainText), &TextSize);
             fHeight = (float)TextSize.cy / g_fScreenRate_y / (TextList[i][0] == 0x0a ? 2.0f : 1.0f);
         }
         else
@@ -459,7 +1117,7 @@ void RenderTipTextList(const int sx, const int sy, int TextNum, int Tab, int iSo
                 g_pRenderText->SetBgColor(0);
             }
             SIZE TextSize;
-            g_pRenderText->RenderText(fsx, fsy, TextList[i], (fWidth - 2), 0, iSort, &TextSize);
+            RenderTooltipTextWithInlinePurple(fsx, fsy, TextList[i], (fWidth - 2), iSort, &TextSize);
             fHeight = TextSize.cy;
         }
         fsy += fHeight * 1.1f;
@@ -1568,13 +2226,19 @@ wchar_t ChaosEventName[][100] = {
 
 WORD CalcMaxDurability(const ITEM* ip, ITEM_ATTRIBUTE* p, int Level)
 {
+    if (ip == nullptr || p == nullptr || !IsValidItemType(ip->Type))
+    {
+        return 0;
+    }
+
+    const int safeLevel = std::clamp(Level, 0, 15);
     WORD maxDurability = p->Durability;
 
     if (ip->Type >= ITEM_STAFF && ip->Type < ITEM_STAFF + MAX_ITEM_INDEX)
     {
         maxDurability = p->MagicDur;
     }
-    for (int i = 0; i < Level; i++)
+    for (int i = 0; i < safeLevel; i++)
     {
         if (ip->Type >= ITEM_SCROLL_OF_BLOOD)
         {
@@ -2109,7 +2773,7 @@ void GetSpecialOptionText(int Type, wchar_t* Text, WORD Option, BYTE Value, int 
 
 void RenderItemInfo(int sx, int sy, ITEM* ip, bool Sell, int Inventype, bool bItemTextListBoxUse)
 {
-    if (ip->Type == -1)
+    if (ip == nullptr || !IsValidItemType(ip->Type))
         return;
 
     tm* ExpireTime;
@@ -2126,8 +2790,9 @@ void RenderItemInfo(int sx, int sy, ITEM* ip, bool Sell, int Inventype, bool bIt
     TextNum = 0;
     SkipNum = 0;
 
-    ZeroMemory(TextListColor, 20 * sizeof(int));
-    for (int i = 0; i < 30; i++)
+    ZeroMemory(TextListColor, kItemEvolutionTooltipLineLimit * sizeof(int));
+    ZeroMemory(TextBold, kItemEvolutionTooltipLineLimit * sizeof(int));
+    for (int i = 0; i < kItemEvolutionTooltipLineLimit; i++)
     {
         TextList[i][0] = 0;
     }
@@ -2169,6 +2834,7 @@ void RenderItemInfo(int sx, int sy, ITEM* ip, bool Sell, int Inventype, bool bIt
         ip->Type == ITEM_EYE_OF_ABYSSAL ||
         ip->Type == ITEM_FLAME_OF_CONDOR || ip->Type == ITEM_FEATHER_OF_CONDOR ||
         ip->Type == ITEM_POTION + 100 ||
+        (ip->Type >= ITEM_POTION + 200 && ip->Type <= ITEM_POTION + 211) ||
         (ip->Type >= ITEM_POTION + 141 && ip->Type <= ITEM_POTION + 144) ||
         (ip->Type >= ITEM_HELPER + 135 && ip->Type <= ITEM_HELPER + 145) ||
         (ip->Type == ITEM_POTION + 160 || ip->Type == ITEM_POTION + 161) ||
@@ -2250,12 +2916,18 @@ void RenderItemInfo(int sx, int sy, ITEM* ip, bool Sell, int Inventype, bool bIt
         {
             if (Sell)
             {
-                DWORD dwValue = ItemValue(ip, 0);
-                ConvertGold(dwValue, Text);
-                wchar_t Text2[100];
+                unsigned long long azothPrice = 0;
+                const int shopSlot = g_pNPCShop != nullptr ? g_pNPCShop->GetPointedItemSlot() : -1;
+                if (AzothClient::GetNpcShopPrice(shopSlot, azothPrice))
+                {
+                    AzothClient::FormatAmount(azothPrice, Text, std::size(Text));
+                }
+                else
+                {
+                    AzothClient::FormatAmount(static_cast<unsigned long long>(ItemValue(ip, 0)), Text, std::size(Text));
+                }
 
-                ConvertTaxGold(ItemValue(ip, 0), Text2);
-                mu_swprintf(TextList[TextNum], I18N::Game::PurchasingPriceSS, Text2, Text);
+                mu_swprintf(TextList[TextNum], L"Azoth price: %ls", Text);
             }
             else
             {
@@ -2668,7 +3340,9 @@ void RenderItemInfo(int sx, int sy, ITEM* ip, bool Sell, int Inventype, bool bIt
     }
 
     TextListColor[TextNum] = Color; TextBold[TextNum] = true; TextNum++;
+    TextNum = AppendWeaponKillCounterTooltip(ip, TextNum);
     mu_swprintf(TextList[TextNum], L"\n"); TextNum++; SkipNum++;
+    TextNum = AppendCustomJewelTooltip(ip->Type, TextNum, SkipNum);
 
     if (ip->Type == ITEM_WEAPON_OF_ARCHANGEL)
     {
@@ -3964,32 +4638,61 @@ void RenderItemInfo(int sx, int sy, ITEM* ip, bool Sell, int Inventype, bool bIt
         }
         int DamageMin = ip->DamageMin;
         int DamageMax = ip->DamageMax;
+        const int itemEvolutionDamageBonus = GetItemEvolutionWeaponDisplayDamageBonus(ip) + GetItemEvolutionMountDisplayDamageBonus(ip);
         if (ip->Type >> 4 == 15)
         {
-            mu_swprintf(TextList[TextNum], L"%ls: %d ~ %d", I18N::Game::Lookup(40 + 2), DamageMin, DamageMax);
+            BuildTooltipDamageRangeLine(
+                TextList[TextNum],
+                sizeof(TextList[TextNum]) / sizeof(TextList[TextNum][0]),
+                I18N::Game::Lookup(40 + 2),
+                DamageMin + itemEvolutionDamageBonus,
+                DamageMax + itemEvolutionDamageBonus,
+                itemEvolutionDamageBonus > 0);
         }
-            else if (ip->Type != ITEM_SCROLL_OF_TELEPORT && ip->Type != ITEM_SCROLL_OF_TELEPORT_ALLY && ip->Type != ITEM_SCROLL_OF_SOUL_BARRIER)
+        else if (ip->Type != ITEM_SCROLL_OF_TELEPORT && ip->Type != ITEM_SCROLL_OF_TELEPORT_ALLY && ip->Type != ITEM_SCROLL_OF_SOUL_BARRIER)
+        {
+            if (ip->Type >= ITEM_ETC && ip->Type < ITEM_ETC + MAX_ITEM_INDEX)
             {
-                if (ip->Type >= ITEM_ETC && ip->Type < ITEM_ETC + MAX_ITEM_INDEX)
+                const ActionSkillType skillIndex = GetSkillByBook(ip->Type);
+                if (SkillAttribute != nullptr
+                    && skillIndex != AT_SKILL_UNDEFINED
+                    && IsValidateSkillIdx(static_cast<INT>(skillIndex)))
                 {
-                    const ActionSkillType skillIndex = GetSkillByBook(ip->Type);
-                    if (SkillAttribute != nullptr
-                        && skillIndex != AT_SKILL_UNDEFINED
-                        && IsValidateSkillIdx(static_cast<INT>(skillIndex)))
-                    {
-                        const SKILL_ATTRIBUTE& skillAtt = SkillAttribute[skillIndex];
-                        DamageMin = skillAtt.Damage;
-                        DamageMax = skillAtt.Damage + skillAtt.Damage / 2;
-                    }
+                    const SKILL_ATTRIBUTE& skillAtt = SkillAttribute[skillIndex];
+                    DamageMin = skillAtt.Damage;
+                    DamageMax = skillAtt.Damage + skillAtt.Damage / 2;
+                }
 
-                    mu_swprintf(TextList[TextNum], L"%ls: %d ~ %d", I18N::Game::WizardryDamage, DamageMin, DamageMax);
+                BuildTooltipDamageRangeLine(
+                    TextList[TextNum],
+                    sizeof(TextList[TextNum]) / sizeof(TextList[TextNum][0]),
+                    I18N::Game::WizardryDamage,
+                    DamageMin + itemEvolutionDamageBonus,
+                    DamageMax + itemEvolutionDamageBonus,
+                    itemEvolutionDamageBonus > 0);
+            }
+            else
+            {
+                if (DamageMin + minindex >= DamageMax + maxindex)
+                {
+                    BuildTooltipDamageRangeLine(
+                        TextList[TextNum],
+                        sizeof(TextList[TextNum]) / sizeof(TextList[TextNum][0]),
+                        I18N::Game::Lookup(40 + p->TwoHand),
+                        DamageMax + maxindex + itemEvolutionDamageBonus,
+                        DamageMax + maxindex + itemEvolutionDamageBonus,
+                        itemEvolutionDamageBonus > 0);
                 }
                 else
                 {
-                if (DamageMin + minindex >= DamageMax + maxindex)
-                    mu_swprintf(TextList[TextNum], L"%ls: %d ~ %d", I18N::Game::Lookup(40 + p->TwoHand), DamageMax + maxindex, DamageMax + maxindex);
-                else
-                    mu_swprintf(TextList[TextNum], L"%ls: %d ~ %d", I18N::Game::Lookup(40 + p->TwoHand), DamageMin + minindex, DamageMax + maxindex);
+                    BuildTooltipDamageRangeLine(
+                        TextList[TextNum],
+                        sizeof(TextList[TextNum]) / sizeof(TextList[TextNum][0]),
+                        I18N::Game::Lookup(40 + p->TwoHand),
+                        DamageMin + minindex + itemEvolutionDamageBonus,
+                        DamageMax + maxindex + itemEvolutionDamageBonus,
+                        itemEvolutionDamageBonus > 0);
+                }
             }
         }
         else
@@ -4034,7 +4737,19 @@ void RenderItemInfo(int sx, int sy, ITEM* ip, bool Sell, int Inventype, bool bIt
                 maxdefense = SC.SI_SD.SI_defense;
             }
         }
-        mu_swprintf(TextList[TextNum], I18N::Game::DefenseD, ip->Defense + maxdefense);
+        const int itemEvolutionDefenseBonus = GetItemEvolutionDefenseDisplayBonus(ip);
+        if (itemEvolutionDefenseBonus > 0)
+        {
+            BuildTooltipHighlightedIntegerFormatLine(
+                TextList[TextNum],
+                sizeof(TextList[TextNum]) / sizeof(TextList[TextNum][0]),
+                I18N::Game::DefenseD,
+                ip->Defense + maxdefense + itemEvolutionDefenseBonus);
+        }
+        else
+        {
+            mu_swprintf(TextList[TextNum], I18N::Game::DefenseD, ip->Defense + maxdefense);
+        }
 
         if (maxdefense != 0)
             TextListColor[TextNum] = TEXT_COLOR_YELLOW;
@@ -4750,7 +5465,15 @@ void RenderItemInfo(int sx, int sy, ITEM* ip, bool Sell, int Inventype, bool bIt
         {
             int maxDurability = CalcMaxDurability(ip, p, Level);
 
-            mu_swprintf(TextList[TextNum], I18N::Game::DurabilityDD, ip->Durability, maxDurability);
+            if (ip->Durability == 255 && maxDurability < 255)
+            {
+                mu_swprintf(TextList[TextNum], L"Durability: \u221E");
+            }
+            else
+            {
+                mu_swprintf(TextList[TextNum], I18N::Game::DurabilityDD, ip->Durability, maxDurability);
+            }
+
             Success = true;
         }
         else if (ip->Type >= ITEM_TYPE_CHARM_MIXWING + EWS_BEGIN && ip->Type <= ITEM_TYPE_CHARM_MIXWING + EWS_END)
@@ -5614,6 +6337,7 @@ void RenderItemInfo(int sx, int sy, ITEM* ip, bool Sell, int Inventype, bool bIt
         TextNum = g_csItemOption.RenderSetOptionListInItem(ip, TextNum, bThisisEquippedItem);
 
         TextNum = g_SocketItemMgr.AttachToolTipForSocketItem(ip, TextNum);
+        TextNum = AppendItemEvolutionTooltip(ip, TextNum, SkipNum);
 
         SIZE TextSize = { 0, 0 };
         float fRateY = g_fScreenRate_y;
@@ -6071,7 +6795,13 @@ void SetJewelTextColor()
     SetYellowTextColor();
 }
 
-std::unordered_set<int> boldTextItems = {
+template <size_t Count>
+bool ContainsItemType(const int (&items)[Count], int itemType)
+{
+    return std::find(std::begin(items), std::end(items), itemType) != std::end(items);
+}
+
+constexpr int boldTextItems[] = {
     MODEL_JEWEL_OF_BLESS,
     MODEL_JEWEL_OF_SOUL,
     MODEL_JEWEL_OF_LIFE,
@@ -6090,12 +6820,12 @@ std::unordered_set<int> boldTextItems = {
     MODEL_DEVILS_INVITATION,
 };
 
-std::unordered_set<int> whiteTextItems = {
+constexpr int whiteTextItems[] = {
     MODEL_SCROLL_OF_CHAOTIC_DISEIER,
     MODEL_SCROLL_OF_FIRE_SCREAM,
 };
 
-std::unordered_set<int> yellowTextItems = {
+constexpr int yellowTextItems[] = {
     
     MODEL_ZEN,
     MODEL_JEWEL_OF_BLESS,
@@ -6182,7 +6912,7 @@ std::unordered_set<int> yellowTextItems = {
     MODEL_SYMBOL_OF_KUNDUN,
 };
 
-std::unordered_set<int> orangeTextItems = {
+constexpr int orangeTextItems[] = {
     MODEL_CHERRY_BLOSSOM_PLAYBOX,
     MODEL_CHERRY_BLOSSOM_WINE,
     MODEL_CHERRY_BLOSSOM_RICE_CAKE,
@@ -6488,6 +7218,14 @@ void BuildGroundItemLabelDescriptor(OBJECT* o, ITEM* ip, GroundItemLabelDescript
     // Use the item name by default
     if (o->Type == MODEL_ZEN) // Zen
     {
+        if (IsAzothMoneyDropAmount(ItemLevel))
+        {
+            descriptor.Font = g_hFontBold;
+            SetDescriptorTextColor(descriptor, 0.15f, 0.68f, 1.f);
+            FormatGroundItemLabelText(descriptor.Name, L"Azoth %d", DecodeAzothMoneyDropAmount(ItemLevel));
+            return;
+        }
+
         FormatGroundItemLabelText(descriptor.Name, L"%ls %d", ItemAttribute[o->Type - MODEL_ITEM].Name, ItemLevel);
     }
     else if (ItemLevel == 0)
@@ -6499,20 +7237,20 @@ void BuildGroundItemLabelDescriptor(OBJECT* o, ITEM* ip, GroundItemLabelDescript
         FormatGroundItemLabelText(descriptor.Name, L"%ls +%d", ItemAttribute[o->Type - MODEL_ITEM].Name, ItemLevel);
     }
 
-    if (boldTextItems.count(o->Type) > 0)
+    if (ContainsItemType(boldTextItems, o->Type))
     {
         descriptor.Font = g_hFontBold;
     }
 
-    if (whiteTextItems.count(o->Type) > 0)
+    if (ContainsItemType(whiteTextItems, o->Type))
     {
         SetDescriptorTextColor(descriptor, 1.f, 1.f, 1.f);
     }
-    else if (yellowTextItems.count(o->Type) > 0)
+    else if (ContainsItemType(yellowTextItems, o->Type))
     {
         SetDescriptorYellowTextColor(descriptor);
     }
-    else if (orangeTextItems.count(o->Type) > 0)
+    else if (ContainsItemType(orangeTextItems, o->Type))
     {
         SetDescriptorOrangeTextColor(descriptor);
     }
@@ -6978,6 +7716,13 @@ void RenderGroundItemLabelTexture(OBJECT* o, const GroundItemLabelCacheEntry& ca
 
 bool RenderGroundItemLabelCached(OBJECT* o, ITEM* ip)
 {
+    // Stability fallback: the cached OpenGL label path can crash inside the STL
+    // hash table on some scene transitions. Use the classic non-cached path
+    // until the cache lifecycle is audited with a debugger dump.
+    (void)o;
+    (void)ip;
+    return false;
+
     GroundItemLabelCacheKey cacheKey = BuildGroundItemLabelCacheKey(o, ip);
     DWORD currentTick = timeGetTime();
 
@@ -7028,7 +7773,9 @@ bool RenderGroundItemLabelCached(OBJECT* o, ITEM* ip)
 
 void SetGroundItemLabelBuildBudget(int buildBudget)
 {
-    g_groundItemLabelBuildBudgetRemaining = buildBudget > 0 ? buildBudget : 0;
+    (void)buildBudget;
+    g_groundItemLabelBuildBudgetRemaining = 0;
+    return;
 
     constexpr DWORD pruneIntervalMs = 250;
     static DWORD lastPruneTick = 0;
@@ -7961,7 +8708,8 @@ bool IsJewelItem(ITEM* pItem)
         || pItem->Type == ITEM_JEWEL_OF_LIFE
         || pItem->Type == ITEM_JEWEL_OF_CHAOS
         || pItem->Type == ITEM_JEWEL_OF_CREATION
-        || pItem->Type == ITEM_JEWEL_OF_GUARDIAN)
+        || pItem->Type == ITEM_JEWEL_OF_GUARDIAN
+        || IsCustomJewelItemType(pItem->Type))
     {
         return true;
     }
