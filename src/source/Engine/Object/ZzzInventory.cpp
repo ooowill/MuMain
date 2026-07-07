@@ -97,8 +97,7 @@ CHARACTER g_PersonalShopSeller;
 namespace
 {
     constexpr int kItemEvolutionTooltipLineLimit = 64;
-    constexpr wchar_t kTooltipPurpleStart = L'\xE000';
-    constexpr wchar_t kTooltipPurpleEnd = L'\xE001';
+    constexpr int kTooltipInlinePurpleValueColorBase = 1000;
 
     enum class ItemEvolutionKind
     {
@@ -252,131 +251,19 @@ namespace
         return std::max(1, (baseValue * percentPerWipe * wipeCount + 50) / 100);
     }
 
-    bool IsTooltipColorMarker(wchar_t ch)
+    bool IsTooltipInlinePurpleValueColor(int color)
     {
-        return ch == kTooltipPurpleStart || ch == kTooltipPurpleEnd;
+        return color >= kTooltipInlinePurpleValueColorBase;
     }
 
-    void CopyTooltipPlainText(wchar_t* destination, size_t destinationLength, const wchar_t* source)
+    int MakeTooltipInlinePurpleValueColor(int baseColor)
     {
-        if (destination == nullptr || destinationLength == 0)
-        {
-            return;
-        }
-
-        destination[0] = L'\0';
-        if (source == nullptr)
-        {
-            return;
-        }
-
-        size_t writeIndex = 0;
-        for (const wchar_t* cursor = source; *cursor != L'\0' && writeIndex + 1 < destinationLength; ++cursor)
-        {
-            if (!IsTooltipColorMarker(*cursor))
-            {
-                destination[writeIndex++] = *cursor;
-            }
-        }
-
-        destination[writeIndex] = L'\0';
+        return kTooltipInlinePurpleValueColorBase + baseColor;
     }
 
-    bool ExtractTooltipPurpleSegment(
-        const wchar_t* source,
-        wchar_t* plain,
-        size_t plainLength,
-        wchar_t* prefix,
-        size_t prefixLength,
-        wchar_t* purple,
-        size_t purpleLength)
+    int GetTooltipInlinePurpleValueBaseColor(int color)
     {
-        if (plain != nullptr && plainLength > 0)
-        {
-            plain[0] = L'\0';
-        }
-        if (prefix != nullptr && prefixLength > 0)
-        {
-            prefix[0] = L'\0';
-        }
-        if (purple != nullptr && purpleLength > 0)
-        {
-            purple[0] = L'\0';
-        }
-
-        if (source == nullptr)
-        {
-            return false;
-        }
-
-        bool insidePurple = false;
-        bool hasPurpleSegment = false;
-        size_t plainWrite = 0;
-        size_t prefixWrite = 0;
-        size_t purpleWrite = 0;
-
-        for (const wchar_t* cursor = source; *cursor != L'\0'; ++cursor)
-        {
-            if (*cursor == kTooltipPurpleStart)
-            {
-                insidePurple = true;
-                hasPurpleSegment = true;
-                continue;
-            }
-
-            if (*cursor == kTooltipPurpleEnd)
-            {
-                insidePurple = false;
-                continue;
-            }
-
-            if (plain != nullptr && plainWrite + 1 < plainLength)
-            {
-                plain[plainWrite++] = *cursor;
-            }
-
-            if (!hasPurpleSegment && prefix != nullptr && prefixWrite + 1 < prefixLength)
-            {
-                prefix[prefixWrite++] = *cursor;
-            }
-
-            if (insidePurple && purple != nullptr && purpleWrite + 1 < purpleLength)
-            {
-                purple[purpleWrite++] = *cursor;
-            }
-        }
-
-        if (plain != nullptr && plainLength > 0)
-        {
-            plain[plainWrite] = L'\0';
-        }
-        if (prefix != nullptr && prefixLength > 0)
-        {
-            prefix[prefixWrite] = L'\0';
-        }
-        if (purple != nullptr && purpleLength > 0)
-        {
-            purple[purpleWrite] = L'\0';
-        }
-
-        return hasPurpleSegment && purpleWrite > 0;
-    }
-
-    void BuildTooltipHighlightedNumberLine(
-        wchar_t* buffer,
-        size_t bufferLength,
-        const wchar_t* label,
-        const wchar_t* valueText)
-    {
-        _snwprintf_s(
-            buffer,
-            bufferLength,
-            _TRUNCATE,
-            L"%ls: %lc%ls%lc",
-            label,
-            kTooltipPurpleStart,
-            valueText,
-            kTooltipPurpleEnd);
+        return IsTooltipInlinePurpleValueColor(color) ? color - kTooltipInlinePurpleValueColorBase : color;
     }
 
     void BuildTooltipDamageRangeLine(
@@ -384,100 +271,102 @@ namespace
         size_t bufferLength,
         const wchar_t* label,
         int minDamage,
-        int maxDamage,
-        bool highlightValue)
+        int maxDamage)
     {
-        if (!highlightValue)
-        {
-            _snwprintf_s(buffer, bufferLength, _TRUNCATE, L"%ls: %d ~ %d", label, minDamage, maxDamage);
-            return;
-        }
-
-        wchar_t valueText[32]{};
-        _snwprintf_s(valueText, sizeof(valueText) / sizeof(valueText[0]), _TRUNCATE, L"%d ~ %d", minDamage, maxDamage);
-        BuildTooltipHighlightedNumberLine(buffer, bufferLength, label, valueText);
+        _snwprintf_s(buffer, bufferLength, _TRUNCATE, L"%ls: %d ~ %d", label, minDamage, maxDamage);
     }
 
-    void BuildTooltipHighlightedIntegerFormatLine(
-        wchar_t* buffer,
-        size_t bufferLength,
-        const wchar_t* format,
-        int value)
+    void SetTooltipTextColor(int color)
     {
-        if (buffer == nullptr || bufferLength == 0)
+        g_pRenderText->SetTextColor(0xffffffff);
+        switch (GetTooltipInlinePurpleValueBaseColor(color))
         {
-            return;
+        case TEXT_COLOR_WHITE:
+        case TEXT_COLOR_DARKRED:
+        case TEXT_COLOR_DARKBLUE:
+        case TEXT_COLOR_DARKYELLOW:
+            glColor3f(1.f, 1.f, 1.f);
+            break;
+        case TEXT_COLOR_BLUE:
+            glColor3f(0.5f, 0.7f, 1.f);
+            break;
+        case TEXT_COLOR_GRAY:
+            glColor3f(0.4f, 0.4f, 0.4f);
+            break;
+        case TEXT_COLOR_GREEN_BLUE:
+            glColor3f(1.f, 1.f, 1.f);
+            break;
+        case TEXT_COLOR_RED:
+            glColor3f(1.f, 0.2f, 0.1f);
+            break;
+        case TEXT_COLOR_YELLOW:
+            glColor3f(1.f, 0.8f, 0.1f);
+            break;
+        case TEXT_COLOR_GREEN:
+            glColor3f(0.1f, 1.f, 0.5f);
+            break;
+        case TEXT_COLOR_PURPLE:
+            glColor3f(1.f, 0.1f, 1.f);
+            break;
+        case TEXT_COLOR_REDPURPLE:
+            glColor3f(0.8f, 0.5f, 0.8f);
+            break;
+        case TEXT_COLOR_VIOLET:
+            glColor3f(0.7f, 0.4f, 1.0f);
+            break;
+        case TEXT_COLOR_ORANGE:
+            glColor3f(0.9f, 0.42f, 0.04f);
+            break;
         }
-
-        buffer[0] = L'\0';
-        if (format == nullptr)
-        {
-            return;
-        }
-
-        const wchar_t* valueMarker = wcsstr(format, L"%d");
-        if (valueMarker == nullptr)
-        {
-            _snwprintf_s(buffer, bufferLength, _TRUNCATE, format, value);
-            return;
-        }
-
-        const int prefixLength = static_cast<int>(valueMarker - format);
-        const wchar_t* suffix = valueMarker + 2;
-        _snwprintf_s(
-            buffer,
-            bufferLength,
-            _TRUNCATE,
-            L"%.*ls%lc%d%lc%ls",
-            prefixLength,
-            format,
-            kTooltipPurpleStart,
-            value,
-            kTooltipPurpleEnd,
-            suffix);
     }
 
-    void RenderTooltipTextWithInlinePurple(
+    void RenderTooltipPurpleValueOverlay(
         float x,
         float y,
-        const wchar_t* markedText,
+        const wchar_t* text,
         float width,
-        int sort,
-        SIZE* textSize)
+        int sort)
     {
-        wchar_t plain[100]{};
-        wchar_t prefix[100]{};
-        wchar_t purple[100]{};
-        const bool hasPurpleSegment = ExtractTooltipPurpleSegment(
-            markedText,
-            plain,
-            sizeof(plain) / sizeof(plain[0]),
-            prefix,
-            sizeof(prefix) / sizeof(prefix[0]),
-            purple,
-            sizeof(purple) / sizeof(purple[0]));
-
-        g_pRenderText->RenderText(x, y, plain, width, 0, sort, textSize);
-
-        if (!hasPurpleSegment)
+        if (text == nullptr)
         {
             return;
         }
 
-        SIZE plainSize{};
+        const wchar_t* valueStart = wcschr(text, L':');
+        if (valueStart == nullptr)
+        {
+            return;
+        }
+
+        ++valueStart;
+        while (*valueStart == L' ')
+        {
+            ++valueStart;
+        }
+
+        if (*valueStart == L'\0')
+        {
+            return;
+        }
+
+        wchar_t prefix[100]{};
+        const size_t prefixLength = std::min<size_t>(valueStart - text, std::size(prefix) - 1);
+        wcsncpy_s(prefix, text, prefixLength);
+
         SIZE prefixSize{};
-        GetTextExtentPoint32(g_pRenderText->GetFontDC(), plain, lstrlen(plain), &plainSize);
+        SIZE fullSize{};
         GetTextExtentPoint32(g_pRenderText->GetFontDC(), prefix, lstrlen(prefix), &prefixSize);
+        GetTextExtentPoint32(g_pRenderText->GetFontDC(), text, lstrlen(text), &fullSize);
 
         float offsetPixels = static_cast<float>(prefixSize.cx);
         const float boxWidthPixels = width * g_fScreenRate_x;
-        if (width > 0.0f && sort == RT3_SORT_CENTER && plainSize.cx < boxWidthPixels)
+        if (width > 0.0f && sort == RT3_SORT_CENTER && fullSize.cx < boxWidthPixels)
         {
-            offsetPixels += (boxWidthPixels - plainSize.cx) / 2.0f;
+            offsetPixels += (boxWidthPixels - fullSize.cx) / 2.0f;
         }
-        else if (width > 0.0f && sort == RT3_SORT_RIGHT && plainSize.cx < boxWidthPixels)
+        else if (width > 0.0f && sort == RT3_SORT_RIGHT && fullSize.cx < boxWidthPixels)
         {
-            offsetPixels += boxWidthPixels - plainSize.cx;
+            offsetPixels += boxWidthPixels - fullSize.cx;
         }
 
         g_pRenderText->SetTextColor(0xffffffff);
@@ -487,7 +376,7 @@ namespace
         g_pRenderText->RenderText(
             x + offsetPixels / g_fScreenRate_x,
             y,
-            purple,
+            valueStart,
             0,
             0,
             RT3_SORT_LEFT,
@@ -865,9 +754,7 @@ int RenderTextList(int sx, int sy, int TextNum, int Tab, int iSort = RT3_SORT_CE
             g_pRenderText->SetFont(g_hFont);
         }
 
-        wchar_t plainText[100]{};
-        CopyTooltipPlainText(plainText, sizeof(plainText) / sizeof(plainText[0]), TextList[i]);
-        GetTextExtentPoint32(g_pRenderText->GetFontDC(), plainText, lstrlen(plainText), &Size[i]);
+        GetTextExtentPoint32(g_pRenderText->GetFontDC(), TextList[i], lstrlen(TextList[i]), &Size[i]);
 
         if (TextWidth < Size[i].cx)
         {
@@ -882,38 +769,7 @@ int RenderTextList(int sx, int sy, int TextNum, int Tab, int iSort = RT3_SORT_CE
 
     for (int i = 0; i < TextNum; i++)
     {
-        g_pRenderText->SetTextColor(0xffffffff);
-
-        switch (TextListColor[i])
-        {
-        case TEXT_COLOR_WHITE:
-        case TEXT_COLOR_DARKRED:
-        case TEXT_COLOR_DARKBLUE:
-        case TEXT_COLOR_DARKYELLOW:
-            glColor3f(1.f, 1.f, 1.f);
-            break;
-        case TEXT_COLOR_BLUE:
-            glColor3f(0.5f, 0.7f, 1.f);
-            break;
-        case TEXT_COLOR_GRAY:
-            glColor3f(0.4f, 0.4f, 0.4f);
-            break;
-        case TEXT_COLOR_GREEN_BLUE:
-            glColor3f(1.f, 1.f, 1.f);
-            break;
-        case TEXT_COLOR_RED:
-            glColor3f(1.f, 0.2f, 0.1f);
-            break;
-        case TEXT_COLOR_YELLOW:
-            glColor3f(1.f, 0.8f, 0.1f);
-            break;
-        case TEXT_COLOR_GREEN:
-            glColor3f(0.1f, 1.f, 0.5f);
-            break;
-        case TEXT_COLOR_PURPLE:
-            glColor3f(1.f, 0.1f, 1.f);
-            break;
-        }
+        SetTooltipTextColor(TextListColor[i]);
         if (TEXT_COLOR_DARKRED == TextListColor[i])
         {
             g_pRenderText->SetBgColor(160, 0, 0, 255);
@@ -945,7 +801,11 @@ int RenderTextList(int sx, int sy, int TextNum, int Tab, int iSort = RT3_SORT_CE
             g_pRenderText->SetFont(g_hFont);
         }
         SIZE TextSize;
-        RenderTooltipTextWithInlinePurple(sx, fsy, TextList[i], TextWidth + Tab, iSort, &TextSize);
+        g_pRenderText->RenderText(sx, fsy, TextList[i], TextWidth + Tab, 0, iSort, &TextSize);
+        if (IsTooltipInlinePurpleValueColor(TextListColor[i]))
+        {
+            RenderTooltipPurpleValueOverlay(sx, fsy, TextList[i], TextWidth + Tab, iSort);
+        }
         fsy += TextSize.cy;
     }
     return TextWidth + Tab;
@@ -975,9 +835,7 @@ void RenderTipTextList(const int sx, const int sy, int TextNum, int Tab, int iSo
             g_pRenderText->SetFont(g_hFont);
         }
 
-        wchar_t plainText[100]{};
-        CopyTooltipPlainText(plainText, sizeof(plainText) / sizeof(plainText[0]), TextList[i]);
-        GetTextExtentPoint32(g_pRenderText->GetFontDC(), plainText, lstrlen(plainText), &TextSize);
+        GetTextExtentPoint32(g_pRenderText->GetFontDC(), TextList[i], lstrlen(TextList[i]), &TextSize);
 
         if (fWidth < TextSize.cx)
             fWidth = TextSize.cx;
@@ -1048,53 +906,12 @@ void RenderTipTextList(const int sx, const int sy, int TextNum, int Tab, int iSo
         float fHeight = 0;
         if (TextList[i][0] == 0x0a || (TextList[i][0] == ' ' && TextList[i][1] == 0x00))
         {
-            wchar_t plainText[100]{};
-            CopyTooltipPlainText(plainText, sizeof(plainText) / sizeof(plainText[0]), TextList[i]);
-            GetTextExtentPoint32(g_pRenderText->GetFontDC(), plainText, lstrlen(plainText), &TextSize);
+            GetTextExtentPoint32(g_pRenderText->GetFontDC(), TextList[i], lstrlen(TextList[i]), &TextSize);
             fHeight = (float)TextSize.cy / g_fScreenRate_y / (TextList[i][0] == 0x0a ? 2.0f : 1.0f);
         }
         else
         {
-            g_pRenderText->SetTextColor(0xffffffff);
-            switch (TextListColor[i])
-            {
-            case TEXT_COLOR_WHITE:
-            case TEXT_COLOR_DARKRED:
-            case TEXT_COLOR_DARKBLUE:
-            case TEXT_COLOR_DARKYELLOW:
-                glColor3f(1.f, 1.f, 1.f);
-                break;
-            case TEXT_COLOR_BLUE:
-                glColor3f(0.5f, 0.7f, 1.f);
-                break;
-            case TEXT_COLOR_GRAY:
-                glColor3f(0.4f, 0.4f, 0.4f);
-                break;
-            case TEXT_COLOR_GREEN_BLUE:
-                glColor3f(1.f, 1.f, 1.f);
-                break;
-            case TEXT_COLOR_RED:
-                glColor3f(1.f, 0.2f, 0.1f);
-                break;
-            case TEXT_COLOR_YELLOW:
-                glColor3f(1.f, 0.8f, 0.1f);
-                break;
-            case TEXT_COLOR_GREEN:
-                glColor3f(0.1f, 1.f, 0.5f);
-                break;
-            case TEXT_COLOR_PURPLE:
-                glColor3f(1.f, 0.1f, 1.f);
-                break;
-            case TEXT_COLOR_REDPURPLE:
-                glColor3f(0.8f, 0.5f, 0.8f);
-                break;
-            case TEXT_COLOR_VIOLET:
-                glColor3f(0.7f, 0.4f, 1.0f);
-                break;
-            case TEXT_COLOR_ORANGE:
-                glColor3f(0.9f, 0.42f, 0.04f);
-                break;
-            }
+            SetTooltipTextColor(TextListColor[i]);
             if (TEXT_COLOR_DARKRED == TextListColor[i])
             {
                 g_pRenderText->SetBgColor(160, 0, 0, 255);
@@ -1117,7 +934,11 @@ void RenderTipTextList(const int sx, const int sy, int TextNum, int Tab, int iSo
                 g_pRenderText->SetBgColor(0);
             }
             SIZE TextSize;
-            RenderTooltipTextWithInlinePurple(fsx, fsy, TextList[i], (fWidth - 2), iSort, &TextSize);
+            g_pRenderText->RenderText(fsx, fsy, TextList[i], (fWidth - 2), 0, iSort, &TextSize);
+            if (IsTooltipInlinePurpleValueColor(TextListColor[i]))
+            {
+                RenderTooltipPurpleValueOverlay(fsx, fsy, TextList[i], (fWidth - 2), iSort);
+            }
             fHeight = TextSize.cy;
         }
         fsy += fHeight * 1.1f;
@@ -4646,8 +4467,7 @@ void RenderItemInfo(int sx, int sy, ITEM* ip, bool Sell, int Inventype, bool bIt
                 sizeof(TextList[TextNum]) / sizeof(TextList[TextNum][0]),
                 I18N::Game::Lookup(40 + 2),
                 DamageMin + itemEvolutionDamageBonus,
-                DamageMax + itemEvolutionDamageBonus,
-                itemEvolutionDamageBonus > 0);
+                DamageMax + itemEvolutionDamageBonus);
         }
         else if (ip->Type != ITEM_SCROLL_OF_TELEPORT && ip->Type != ITEM_SCROLL_OF_TELEPORT_ALLY && ip->Type != ITEM_SCROLL_OF_SOUL_BARRIER)
         {
@@ -4666,10 +4486,9 @@ void RenderItemInfo(int sx, int sy, ITEM* ip, bool Sell, int Inventype, bool bIt
                 BuildTooltipDamageRangeLine(
                     TextList[TextNum],
                     sizeof(TextList[TextNum]) / sizeof(TextList[TextNum][0]),
-                    I18N::Game::WizardryDamage,
-                    DamageMin + itemEvolutionDamageBonus,
-                    DamageMax + itemEvolutionDamageBonus,
-                    itemEvolutionDamageBonus > 0);
+                        I18N::Game::WizardryDamage,
+                        DamageMin + itemEvolutionDamageBonus,
+                        DamageMax + itemEvolutionDamageBonus);
             }
             else
             {
@@ -4680,8 +4499,7 @@ void RenderItemInfo(int sx, int sy, ITEM* ip, bool Sell, int Inventype, bool bIt
                         sizeof(TextList[TextNum]) / sizeof(TextList[TextNum][0]),
                         I18N::Game::Lookup(40 + p->TwoHand),
                         DamageMax + maxindex + itemEvolutionDamageBonus,
-                        DamageMax + maxindex + itemEvolutionDamageBonus,
-                        itemEvolutionDamageBonus > 0);
+                        DamageMax + maxindex + itemEvolutionDamageBonus);
                 }
                 else
                 {
@@ -4690,8 +4508,7 @@ void RenderItemInfo(int sx, int sy, ITEM* ip, bool Sell, int Inventype, bool bIt
                         sizeof(TextList[TextNum]) / sizeof(TextList[TextNum][0]),
                         I18N::Game::Lookup(40 + p->TwoHand),
                         DamageMin + minindex + itemEvolutionDamageBonus,
-                        DamageMax + maxindex + itemEvolutionDamageBonus,
-                        itemEvolutionDamageBonus > 0);
+                        DamageMax + maxindex + itemEvolutionDamageBonus);
                 }
             }
         }
@@ -4702,21 +4519,22 @@ void RenderItemInfo(int sx, int sy, ITEM* ip, bool Sell, int Inventype, bool bIt
 
         if (DamageMin > 0)
         {
+            int statColor = TEXT_COLOR_WHITE;
             if (minindex != 0 || maxindex != 0)
             {
-                TextListColor[TextNum] = TEXT_COLOR_YELLOW;
-                TextBold[TextNum] = false;
-                TextNum++;
+                statColor = TEXT_COLOR_YELLOW;
             }
             else
             {
                 if (ip->ExcellentFlags > 0)
-                    TextListColor[TextNum] = TEXT_COLOR_BLUE;
+                    statColor = TEXT_COLOR_BLUE;
                 else
-                    TextListColor[TextNum] = TEXT_COLOR_WHITE;
-                TextBold[TextNum] = false;
-                TextNum++;
+                    statColor = TEXT_COLOR_WHITE;
             }
+
+            TextListColor[TextNum] = itemEvolutionDamageBonus > 0 ? MakeTooltipInlinePurpleValueColor(statColor) : statColor;
+            TextBold[TextNum] = false;
+            TextNum++;
         }
         else
         {
@@ -4738,29 +4556,20 @@ void RenderItemInfo(int sx, int sy, ITEM* ip, bool Sell, int Inventype, bool bIt
             }
         }
         const int itemEvolutionDefenseBonus = GetItemEvolutionDefenseDisplayBonus(ip);
-        if (itemEvolutionDefenseBonus > 0)
-        {
-            BuildTooltipHighlightedIntegerFormatLine(
-                TextList[TextNum],
-                sizeof(TextList[TextNum]) / sizeof(TextList[TextNum][0]),
-                I18N::Game::DefenseD,
-                ip->Defense + maxdefense + itemEvolutionDefenseBonus);
-        }
-        else
-        {
-            mu_swprintf(TextList[TextNum], I18N::Game::DefenseD, ip->Defense + maxdefense);
-        }
+        mu_swprintf(TextList[TextNum], I18N::Game::DefenseD, ip->Defense + maxdefense + itemEvolutionDefenseBonus);
 
+        int defenseColor = TEXT_COLOR_WHITE;
         if (maxdefense != 0)
-            TextListColor[TextNum] = TEXT_COLOR_YELLOW;
+            defenseColor = TEXT_COLOR_YELLOW;
         else
         {
             if (ip->Type >= ITEM_HELM && ip->Type < ITEM_BOOTS + MAX_ITEM_INDEX && ip->ExcellentFlags > 0)
-                TextListColor[TextNum] = TEXT_COLOR_BLUE;
+                defenseColor = TEXT_COLOR_BLUE;
             else
-                TextListColor[TextNum] = TEXT_COLOR_WHITE;
+                defenseColor = TEXT_COLOR_WHITE;
         }
 
+        TextListColor[TextNum] = itemEvolutionDefenseBonus > 0 ? MakeTooltipInlinePurpleValueColor(defenseColor) : defenseColor;
         TextBold[TextNum] = false;
         TextNum++;
     }
