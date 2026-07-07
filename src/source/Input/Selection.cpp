@@ -54,6 +54,52 @@ extern int Attacking;
 
 namespace Input::Selection
 {
+namespace
+{
+    bool IsSmallGroundPickupModel(const OBJECT* o)
+    {
+        return o != nullptr && o->Type == MODEL_EVENT + 10;
+    }
+
+    OBB_t BuildGroundPickupOBB(const OBJECT* o)
+    {
+        OBB_t pickOBB = o->OBB;
+        if (!IsSmallGroundPickupModel(o))
+        {
+            return pickOBB;
+        }
+
+        constexpr float halfWidth = 70.0f;
+        constexpr float bottomOffset = 20.0f;
+        constexpr float height = 120.0f;
+
+        pickOBB.StartPos[0] = o->Position[0] - halfWidth;
+        pickOBB.StartPos[1] = o->Position[1] - halfWidth;
+        pickOBB.StartPos[2] = o->Position[2] - bottomOffset;
+        pickOBB.XAxis[0] = halfWidth * 2.0f;
+        pickOBB.XAxis[1] = 0.0f;
+        pickOBB.XAxis[2] = 0.0f;
+        pickOBB.YAxis[0] = 0.0f;
+        pickOBB.YAxis[1] = halfWidth * 2.0f;
+        pickOBB.YAxis[2] = 0.0f;
+        pickOBB.ZAxis[0] = 0.0f;
+        pickOBB.ZAxis[1] = 0.0f;
+        pickOBB.ZAxis[2] = height;
+        return pickOBB;
+    }
+
+    bool IsMouseOverGroundPickup(const OBJECT* o)
+    {
+        if (CollisionDetectLineToOBB(MousePosition, MouseTarget, o->OBB))
+        {
+            return true;
+        }
+
+        return IsSmallGroundPickupModel(o)
+            && CollisionDetectLineToOBB(MousePosition, MouseTarget, BuildGroundPickupOBB(o));
+    }
+}
+
 int SelectItem()
 {
     for (int i = 0; i < MAX_ITEMS; i++)
@@ -72,7 +118,7 @@ int SelectItem()
         OBJECT* o = &Items[i].Object;
         if (o->Live && o->Visible)
         {
-            if (CollisionDetectLineToOBB(MousePosition, MouseTarget, o->OBB))
+            if (IsMouseOverGroundPickup(o))
             {
                 {
                     o->LightEnable = false;
@@ -369,32 +415,37 @@ void SelectObjects()
             }
             else
             {
-                if (SelectedCharacter == -1)
+                if (SEASON3B::CNewUIInventoryCtrl::GetPickedItem() == NULL)
                 {
-                    SelectedCharacter = SelectCharacter(CKind_1);
+                    SelectedItem = SelectItem();
                 }
-                if (SelectedCharacter == -1)
+
+                if (SelectedItem != -1)
                 {
-                    SelectedCharacter = SelectCharacter(CKind_2);
+                    g_pPartyManager->SearchPartyMember();
+                }
+                else
+                {
                     if (SelectedCharacter == -1)
                     {
-                        SelectedNpc = SelectCharacter(KIND_NPC);
-                        if (SelectedNpc == -1)
+                        SelectedCharacter = SelectCharacter(CKind_1);
+                    }
+                    if (SelectedCharacter == -1)
+                    {
+                        SelectedCharacter = SelectCharacter(CKind_2);
+                        if (SelectedCharacter == -1)
                         {
-                            if (SEASON3B::CNewUIInventoryCtrl::GetPickedItem() == NULL)
-                            {
-                                SelectedItem = SelectItem();
-                            }
-                            if (SelectedItem == -1)
+                            SelectedNpc = SelectCharacter(KIND_NPC);
+                            if (SelectedNpc == -1)
                             {
                                 SelectedOperate = SelectOperate();
                             }
                         }
                     }
-                }
-                else if (Attacking != -1)
-                {
-                    g_pPartyManager->SearchPartyMember();
+                    else if (Attacking != -1)
+                    {
+                        g_pPartyManager->SearchPartyMember();
+                    }
                 }
             }
         }
