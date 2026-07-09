@@ -620,13 +620,15 @@ bool KillNotificationClient::HandleKillMessage(const wchar_t* message)
     }
 
     const std::wstring noticeType = TrimName(PercentDecode(fields[0]));
-    if (noticeType != L"p" && noticeType != L"player")
+    const bool isPlayerKill = noticeType == L"p" || noticeType == L"player";
+    const bool isSentinelKill = noticeType == L"s" || noticeType == L"sentinel";
+    if (!isPlayerKill && !isSentinelKill)
     {
         return true;
     }
 
     KillNotification notification;
-    notification.IsSentinel = false;
+    notification.IsSentinel = isSentinelKill;
     notification.KillerName = TrimName(PercentDecode(fields[1]));
     notification.VictimName = TrimName(PercentDecode(fields[2]));
 
