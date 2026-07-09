@@ -7,16 +7,21 @@
 #include <cwchar>
 #include <cwctype>
 #include <deque>
+#include <fstream>
 #include <mutex>
 #include <string>
+#include <sys/stat.h>
 #include <thread>
 #include <unordered_map>
 #include <vector>
 
 #ifdef _WIN32
+#include <objidl.h>
+#include <gdiplus.h>
 #include <io.h>
 #include <urlmon.h>
 #ifdef _MSC_VER
+#pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "urlmon.lib")
 #endif
 #endif
@@ -30,20 +35,21 @@ namespace
 {
     constexpr wchar_t kKillPrefix[] = L"#KIL1|";
     constexpr wchar_t kAvatarBaseUrl[] = L"https://user.muonline.pt/kill-avatar/";
-    constexpr bool kEnableRemoteAvatarTextures = false;
+    constexpr bool kEnableRemoteAvatarTextures = true;
 
-    constexpr float kBannerWidth = 238.0f;
-    constexpr float kBannerHeight = 36.0f;
+    constexpr float kBannerWidth = 115.0f;
+    constexpr float kBannerHeight = 18.0f;
     constexpr float kBannerMarginRight = 9.0f;
-    constexpr float kBannerTop = 66.0f;
-    constexpr float kBannerStackGap = 4.0f;
+    constexpr float kBannerTop = 78.0f;
+    constexpr float kBannerStackGap = 1.0f;
     constexpr float kBannerTextureU = 1.0f;
     constexpr float kBannerTextureV = 154.0f / 256.0f;
-    constexpr float kAvatarSize = 25.0f;
-    constexpr float kLeftAvatarX = 5.0f;
+    constexpr float kAvatarSize = 12.0f;
+    constexpr float kLeftAvatarX = 3.0f;
     constexpr float kRightAvatarX = kBannerWidth - kLeftAvatarX - kAvatarSize;
-    constexpr float kAvatarY = 5.0f;
-    constexpr int kMaxNotifications = 3;
+    constexpr float kAvatarY = 3.0f;
+    constexpr int kMaxNotifications = 10;
+    constexpr unsigned long long kMaxAvatarDownloadBytes = 512ULL * 1024ULL;
     constexpr int kFadeInMs = 260;
     constexpr int kHoldMs = 3100;
     constexpr int kFadeOutMs = 420;
@@ -72,6 +78,7 @@ namespace
     };
 
     std::deque<KillNotification> g_notifications;
+    std::mutex g_notificationsMutex;
     std::unordered_map<std::wstring, AvatarCacheEntry> g_avatarCache;
     std::mutex g_avatarMutex;
     GLuint g_bannerTexture = BITMAP_UNKNOWN;
@@ -196,17 +203,191 @@ namespace
         return name;
     }
 
+    std::string WideToUtf8(const std::wstring& value)
+    {
+        if (value.empty())
+        {
+            return {};
+        }
+
+#ifdef _WIN32
+        const int inputLength = static_cast<int>(value.size());
+        const int outputLength = WideCharToMultiByte(CP_UTF8, 0, value.data(), inputLength, nullptr, 0, nullptr, nullptr);
+        if (outputLength > 0)
+        {
+            std::string output(static_cast<size_t>(outputLength), '\0');
+            WideCharToMultiByte(CP_UTF8, 0, value.data(), inputLength, output.data(), outputLength, nullptr, nullptr);
+            return output;
+        }
+#endif
+
+        return std::string(value.begin(), value.end());
+    }
+
+    std::wstring PercentEncode(const std::wstring& value)
+    {
+        std::wstring encoded;
+        const std::string bytes = WideToUtf8(value);
+        for (const unsigned char byte : bytes)
+        {
+            const bool safe =
+                (byte >= 'a' && byte <= 'z') ||
+                (byte >= 'A' && byte <= 'Z') ||
+                (byte >= '0' && byte <= '9') ||
+                byte == '-' ||
+                byte == '_' ||
+                byte == '.';
+            if (safe)
+            {
+                encoded.push_back(static_cast<wchar_t>(byte));
+                continue;
+            }
+
+            wchar_t escaped[4] {};
+            std::swprintf(escaped, sizeof(escaped) / sizeof(escaped[0]), L"%%%02X", static_cast<unsigned int>(byte));
+            encoded += escaped;
+        }
+
+        return encoded;
+    }
+
     std::wstring BuildAvatarUrl(const std::wstring& name)
     {
         std::wstring url = kAvatarBaseUrl;
-        url += name;
+        url += PercentEncode(name);
         return url;
     }
 
-    bool FileExists(const std::wstring& path)
+    unsigned long long FileSizeBytes(const std::wstring& path)
     {
 #ifdef _WIN32
-        return _waccess(path.c_str(), 0) == 0;
+        struct _stat64 info {};
+        if (_wstat64(path.c_str(), &info) != 0 || info.st_size <= 0)
+        {
+            return 0;
+        }
+
+        return static_cast<unsigned long long>(info.st_size);
+#else
+        return 0;
+#endif
+    }
+
+    bool IsUsableAvatarFile(const std::wstring& path)
+    {
+        const unsigned long long size = FileSizeBytes(path);
+        return size > 0 && size <= kMaxAvatarDownloadBytes;
+    }
+
+    bool IsJpegFile(const std::wstring& path)
+    {
+        std::ifstream file(path, std::ios::binary);
+        if (!file)
+        {
+            return false;
+        }
+
+        unsigned char header[2] {};
+        file.read(reinterpret_cast<char*>(header), sizeof(header));
+        return file.gcount() == sizeof(header) && header[0] == 0xFF && header[1] == 0xD8;
+    }
+
+#ifdef _WIN32
+    bool EnsureGdiplusStarted()
+    {
+        static std::once_flag startFlag;
+        static bool started = false;
+        static ULONG_PTR token = 0;
+        std::call_once(startFlag, []()
+        {
+            Gdiplus::GdiplusStartupInput input;
+            started = Gdiplus::GdiplusStartup(&token, &input, nullptr) == Gdiplus::Ok;
+        });
+
+        return started;
+    }
+
+    int GetImageEncoderClsid(const wchar_t* mimeType, CLSID* clsid)
+    {
+        UINT encoderCount = 0;
+        UINT encoderBytes = 0;
+        if (Gdiplus::GetImageEncodersSize(&encoderCount, &encoderBytes) != Gdiplus::Ok || encoderBytes == 0)
+        {
+            return -1;
+        }
+
+        std::vector<BYTE> buffer(encoderBytes);
+        auto* encoders = reinterpret_cast<Gdiplus::ImageCodecInfo*>(buffer.data());
+        if (Gdiplus::GetImageEncoders(encoderCount, encoderBytes, encoders) != Gdiplus::Ok)
+        {
+            return -1;
+        }
+
+        for (UINT index = 0; index < encoderCount; ++index)
+        {
+            if (std::wcscmp(encoders[index].MimeType, mimeType) == 0)
+            {
+                *clsid = encoders[index].Clsid;
+                return static_cast<int>(index);
+            }
+        }
+
+        return -1;
+    }
+
+    bool ConvertAvatarToJpeg(const std::wstring& path)
+    {
+        if (!EnsureGdiplusStarted())
+        {
+            return false;
+        }
+
+        CLSID jpegClsid {};
+        if (GetImageEncoderClsid(L"image/jpeg", &jpegClsid) < 0)
+        {
+            return false;
+        }
+
+        Gdiplus::Bitmap bitmap(path.c_str());
+        if (bitmap.GetLastStatus() != Gdiplus::Ok)
+        {
+            return false;
+        }
+
+        const std::wstring convertedPath = path + L".converted.jpg";
+        ULONG quality = 90;
+        Gdiplus::EncoderParameters parameters {};
+        parameters.Count = 1;
+        parameters.Parameter[0].Guid = Gdiplus::EncoderQuality;
+        parameters.Parameter[0].Type = Gdiplus::EncoderParameterValueTypeLong;
+        parameters.Parameter[0].NumberOfValues = 1;
+        parameters.Parameter[0].Value = &quality;
+
+        if (bitmap.Save(convertedPath.c_str(), &jpegClsid, &parameters) != Gdiplus::Ok)
+        {
+            DeleteFileW(convertedPath.c_str());
+            return false;
+        }
+
+        if (!MoveFileExW(convertedPath.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING))
+        {
+            DeleteFileW(convertedPath.c_str());
+            return false;
+        }
+
+        return IsJpegFile(path);
+    }
+#endif
+
+    bool EnsureAvatarJpeg(const std::wstring& path)
+    {
+        if (IsJpegFile(path))
+        {
+            return true;
+        }
+
+#ifdef _WIN32
+        return ConvertAvatarToJpeg(path);
 #else
         return false;
 #endif
@@ -232,7 +413,7 @@ namespace
             std::lock_guard<std::mutex> lock(g_avatarMutex);
             auto& entry = g_avatarCache[url];
             entry.DownloadFinished = true;
-            entry.DownloadSucceeded = SUCCEEDED(result) && FileExists(localPath);
+            entry.DownloadSucceeded = SUCCEEDED(result) && IsUsableAvatarFile(localPath);
         }).detach();
 #else
         std::lock_guard<std::mutex> lock(g_avatarMutex);
@@ -253,7 +434,7 @@ namespace
         if (!entry.DownloadStarted)
         {
             entry.DownloadStarted = true;
-            if (FileExists(entry.LocalPath))
+            if (IsUsableAvatarFile(entry.LocalPath))
             {
                 entry.DownloadFinished = true;
                 entry.DownloadSucceeded = true;
@@ -298,6 +479,11 @@ namespace
             localPath = entry.LocalPath;
         }
 
+        if (!EnsureAvatarJpeg(localPath))
+        {
+            return BITMAP_UNKNOWN;
+        }
+
         Bitmaps.Convert_Format(localPath);
         const GLuint texture = Bitmaps.LoadImage(localPath, GL_LINEAR, GL_CLAMP_TO_EDGE);
         std::lock_guard<std::mutex> lock(g_avatarMutex);
@@ -335,6 +521,21 @@ namespace
         }
 
         return 1.0f;
+    }
+
+    void PurgeExpiredNotificationsLocked(Clock::time_point now)
+    {
+        while (!g_notifications.empty() && AgeMs(g_notifications.back(), now) >= kTotalMs)
+        {
+            g_notifications.pop_back();
+        }
+    }
+
+    std::vector<KillNotification> SnapshotNotifications(Clock::time_point now)
+    {
+        std::lock_guard<std::mutex> lock(g_notificationsMutex);
+        PurgeExpiredNotificationsLocked(now);
+        return std::vector<KillNotification>(g_notifications.begin(), g_notifications.end());
     }
 
     std::wstring InitialFor(const std::wstring& name)
@@ -388,13 +589,13 @@ namespace
         const BYTE textAlpha = static_cast<BYTE>(240.0f * alpha);
         g_pRenderText->SetBgColor(0);
         g_pRenderText->SetTextColor(255, 240, 205, textAlpha);
-        g_pRenderText->RenderText(static_cast<int>(x + 36.0f), static_cast<int>(y + 10.0f), notification.KillerName.c_str(), 65, 0, RT3_SORT_CENTER);
-        g_pRenderText->RenderText(static_cast<int>(x + 137.0f), static_cast<int>(y + 10.0f), notification.VictimName.c_str(), 65, 0, RT3_SORT_CENTER);
+        g_pRenderText->RenderText(static_cast<int>(x + 18.0f), static_cast<int>(y + 5.0f), notification.KillerName.c_str(), 32, 0, RT3_SORT_CENTER);
+        g_pRenderText->RenderText(static_cast<int>(x + 66.0f), static_cast<int>(y + 5.0f), notification.VictimName.c_str(), 32, 0, RT3_SORT_CENTER);
 
         if (notification.IsSentinel)
         {
             g_pRenderText->SetTextColor(255, 190, 105, static_cast<BYTE>(215.0f * alpha));
-            g_pRenderText->RenderText(static_cast<int>(x + 91.0f), static_cast<int>(y + 23.0f), L"SENTINELA", 58, 0, RT3_SORT_CENTER);
+            g_pRenderText->RenderText(static_cast<int>(x + 41.0f), static_cast<int>(y + 12.0f), L"SENTINELA", 33, 0, RT3_SORT_CENTER);
         }
     }
 }
@@ -431,10 +632,13 @@ bool KillNotificationClient::HandleKillMessage(const wchar_t* message)
         return true;
     }
 
-    g_notifications.push_front(notification);
-    while (g_notifications.size() > kMaxNotifications)
     {
-        g_notifications.pop_back();
+        std::lock_guard<std::mutex> lock(g_notificationsMutex);
+        g_notifications.push_front(notification);
+        while (g_notifications.size() > kMaxNotifications)
+        {
+            g_notifications.pop_back();
+        }
     }
 
     return true;
@@ -447,25 +651,23 @@ void KillNotificationClient::RenderProfileAvatar(const std::wstring& characterNa
 
 void KillNotificationClient::Reset()
 {
+    std::lock_guard<std::mutex> lock(g_notificationsMutex);
     g_notifications.clear();
 }
 
 void KillNotificationClient::Tick()
 {
-    const auto now = Clock::now();
-    while (!g_notifications.empty() && AgeMs(g_notifications.back(), now) >= kTotalMs)
-    {
-        g_notifications.pop_back();
-    }
+    std::lock_guard<std::mutex> lock(g_notificationsMutex);
+    PurgeExpiredNotificationsLocked(Clock::now());
 }
 
 void KillNotificationClient::Render()
 {
-    Tick();
-
     const auto now = Clock::now();
+    const std::vector<KillNotification> notifications = SnapshotNotifications(now);
+
     int index = 0;
-    for (const KillNotification& notification : g_notifications)
+    for (const KillNotification& notification : notifications)
     {
         RenderNotification(notification, index, now);
         ++index;
