@@ -619,18 +619,27 @@ bool KillNotificationClient::HandleKillMessage(const wchar_t* message)
         return true;
     }
 
-    KillNotification notification;
-    notification.IsSentinel = fields[0] == L"s" || fields[0] == L"sentinel";
-    notification.KillerName = TrimName(PercentDecode(fields[1]));
-    notification.VictimName = TrimName(PercentDecode(fields[2]));
-    notification.KillerAvatarUrl = BuildAvatarUrl(notification.KillerName);
-    notification.VictimAvatarUrl = BuildAvatarUrl(notification.VictimName);
-    notification.CreatedAt = Clock::now();
-
-    if (notification.KillerName.empty() || notification.VictimName.empty())
+    const std::wstring noticeType = TrimName(PercentDecode(fields[0]));
+    if (noticeType != L"p" && noticeType != L"player")
     {
         return true;
     }
+
+    KillNotification notification;
+    notification.IsSentinel = false;
+    notification.KillerName = TrimName(PercentDecode(fields[1]));
+    notification.VictimName = TrimName(PercentDecode(fields[2]));
+
+    if (notification.KillerName.empty()
+        || notification.VictimName.empty()
+        || notification.KillerName == notification.VictimName)
+    {
+        return true;
+    }
+
+    notification.KillerAvatarUrl = BuildAvatarUrl(notification.KillerName);
+    notification.VictimAvatarUrl = BuildAvatarUrl(notification.VictimName);
+    notification.CreatedAt = Clock::now();
 
     {
         std::lock_guard<std::mutex> lock(g_notificationsMutex);
