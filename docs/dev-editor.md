@@ -158,3 +158,20 @@ src/MuEditor/
       DevEditorUI.h              # struct + interface
       DevEditorUI.cpp            # all panels, overrides, debug toggles
 ```
+
+## Public release security boundary
+
+The editor is an administrative development tool and must never be distributed in the player client.
+
+- Build the public client from the `windows-x86-release` preset with `ENABLE_EDITOR=OFF`.
+- Build the administrative editor separately from `windows-x86-mueditor` with `_EDITOR` enabled.
+- Start the administrative editor with both `--editor --character-map-editor` arguments.
+- Before packaging, run `Tools/Release/Assert-NoEditorBinary.ps1` against the staged `Main.exe`.
+- The release guard rejects known editor markers and blocks publication on any match.
+- The launcher anti-cheat manifest must pin the exact SHA-256 of the accepted public `Main.exe`.
+
+Command example:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File Tools/Release/Assert-NoEditorBinary.ps1 -MainPath out/build/windows-x86/src/Release/Main.exe
+```
