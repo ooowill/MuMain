@@ -3,6 +3,7 @@
 
 #include "stdafx.h"
 #include <cstdint>
+#include <cmath>
 #include "Render/Textures/ZzzOpenglUtil.h"
 #include "Engine/Object/ZzzInfomation.h" 
 #include "ZzzBMD.h"
@@ -18,6 +19,9 @@
 #include "Camera/CameraMove.h"
 #include "Engine/Physics/PhysicsManager.h"
 #include "UI/NewUI/NewUISystem.h"
+#include "World/MapInfra/MapManager.h"
+
+#include <array>
 
 BMD* Models;
 BMD* ModelsDump;
@@ -43,6 +47,83 @@ float ParentMatrix[3][4];
 
 static vec3_t LightVector = { 0.f, -0.1f, -0.8f };
 static vec3_t LightVector2 = { 0.f, -0.5f, -0.8f };
+
+namespace
+{
+    float Clamp01ForNightShadow(float value)
+    {
+        if (value < 0.f)
+        {
+            return 0.f;
+        }
+
+        if (value > 1.f)
+        {
+            return 1.f;
+        }
+
+        return value;
+    }
+
+    float SmoothStepForNightShadow(float value)
+    {
+        value = Clamp01ForNightShadow(value);
+        return value * value * (3.f - (2.f * value));
+    }
+
+    bool IsDayNightShadowMap()
+    {
+        return gMapManager.WorldActive == WD_0LORENCIA ||
+               gMapManager.WorldActive == WD_2DEVIAS ||
+               gMapManager.WorldActive == WD_3NORIA;
+    }
+
+    float GetDayNightShadowPhase()
+    {
+        constexpr double kCycleMilliseconds = 10.0 * 60.0 * 1000.0;
+        double timeInCycle = std::fmod(WorldTime, kCycleMilliseconds);
+        if (timeInCycle < 0.0)
+        {
+            timeInCycle += kCycleMilliseconds;
+        }
+
+        return static_cast<float>(timeInCycle / kCycleMilliseconds);
+    }
+
+    float GetDayNightShadowNightStrength()
+    {
+        const float phase = GetDayNightShadowPhase();
+        if (phase < 0.15f)
+        {
+            return 1.f - SmoothStepForNightShadow(phase / 0.15f);
+        }
+
+        if (phase < 0.55f)
+        {
+            return 0.f;
+        }
+
+        if (phase < 0.70f)
+        {
+            return SmoothStepForNightShadow((phase - 0.55f) / 0.15f);
+        }
+
+        return 1.f;
+    }
+
+    float GetDayNightBodyShadowAlpha()
+    {
+        constexpr float kDayShadowAlpha = 0.50f;
+        if (!IsDayNightShadowMap())
+        {
+            return kDayShadowAlpha;
+        }
+
+        const float night = GetDayNightShadowNightStrength();
+        const float fullNightAlpha = gMapManager.WorldActive == WD_2DEVIAS ? 0.10f : 0.14f;
+        return kDayShadowAlpha - ((kDayShadowAlpha - fullNightAlpha) * night);
+    }
+}
 
 void BMD::Animation(float(*BoneMatrix)[3][4], float AnimationFrame, float PriorFrame, unsigned short PriorAction, vec3_t Angle, vec3_t HeadAngle, bool Parent, bool Translate)
 {
@@ -2339,6 +2420,11 @@ void BMD::AddMeshShadowTriangles(const int blendMesh, const int hiddenMesh, cons
 
 void BMD::RenderBodyShadow(const int blendMesh, const int hiddenMesh, const int startMeshNumber, const int endMeshNumber, void* pClothes, const int clothesCount)
 {
+    if (gMapManager.WorldActive == WD_74NEW_CHARACTER_SCENE)
+    {
+        return;
+    }
+
     if (!g_pOption->GetRenderAllEffects())
     {
         return;
@@ -2349,9 +2435,15 @@ void BMD::RenderBodyShadow(const int blendMesh, const int hiddenMesh, const int 
         return;
     }
 
+    const float shadowAlpha = GetDayNightBodyShadowAlpha();
+    if (shadowAlpha <= 0.01f)
+    {
+        return;
+    }
+
     EnableAlphaTest(false);
 
-    glColor4f(0.0f, 0.0f, 0.0f, 0.5f); // 50% opacity for shadows
+    glColor4f(0.0f, 0.0f, 0.0f, shadowAlpha);
 
     DisableTexture();
     DisableDepthMask();
@@ -2680,6 +2772,102 @@ private:
     size_t ptr;
 };
 
+namespace
+{
+    constexpr std::array<std::uint32_t, 8> kLeaDelta{
+        0xc3efe9dbu, 0x44626b02u, 0x79e27c8au, 0x78df30ecu,
+        0x715ea49eu, 0xc785da0au, 0xe04ef22au, 0xe5c40957u,
+    };
+
+    constexpr std::array<unsigned char, 32> kBmdLeaKey{
+        0xcc, 0x50, 0x45, 0x13, 0xc2, 0xa6, 0x57, 0x4e,
+        0xd6, 0x9a, 0x45, 0x89, 0xbf, 0x2f, 0xbc, 0xd9,
+        0x39, 0xb3, 0xb3, 0xbd, 0x50, 0xbd, 0xcc, 0xb6,
+        0x85, 0x46, 0xd1, 0xd6, 0x16, 0x54, 0xe0, 0x87,
+    };
+
+    std::uint32_t RotateLeft(std::uint32_t value, unsigned int count)
+    {
+        const unsigned int shift = count & 31u;
+        return (value << shift) | (value >> ((32u - shift) & 31u));
+    }
+
+    std::uint32_t RotateRight(std::uint32_t value, unsigned int count)
+    {
+        const unsigned int shift = count & 31u;
+        return (value >> shift) | (value << ((32u - shift) & 31u));
+    }
+
+    std::uint32_t ReadLittleEndian32(const unsigned char* source)
+    {
+        return static_cast<std::uint32_t>(source[0])
+            | (static_cast<std::uint32_t>(source[1]) << 8u)
+            | (static_cast<std::uint32_t>(source[2]) << 16u)
+            | (static_cast<std::uint32_t>(source[3]) << 24u);
+    }
+
+    void WriteLittleEndian32(unsigned char* destination, std::uint32_t value)
+    {
+        destination[0] = static_cast<unsigned char>(value);
+        destination[1] = static_cast<unsigned char>(value >> 8u);
+        destination[2] = static_cast<unsigned char>(value >> 16u);
+        destination[3] = static_cast<unsigned char>(value >> 24u);
+    }
+
+    std::array<std::uint32_t, 192> CreateLeaRoundKeys()
+    {
+        std::array<std::uint32_t, 8> state{};
+        for (std::size_t word = 0; word < state.size(); ++word)
+            state[word] = ReadLittleEndian32(kBmdLeaKey.data() + word * 4);
+
+        std::array<std::uint32_t, 192> roundKeys{};
+        constexpr std::array<unsigned int, 6> rotations{ 1u, 3u, 6u, 11u, 13u, 17u };
+        for (unsigned int round = 0; round < 32u; ++round)
+        {
+            const std::uint32_t delta = kLeaDelta[round & 7u];
+            const unsigned int stateStart = (round * 6u) & 7u;
+            for (unsigned int key = 0; key < 6u; ++key)
+            {
+                const unsigned int stateIndex = (stateStart + key) & 7u;
+                state[stateIndex] = RotateLeft(
+                    state[stateIndex] + RotateLeft(delta, round + key),
+                    rotations[key]);
+                roundKeys[round * 6u + key] = state[stateIndex];
+            }
+        }
+        return roundKeys;
+    }
+
+    bool DecryptLea256Ecb(unsigned char* destination, const unsigned char* source, std::size_t size)
+    {
+        if (destination == nullptr || source == nullptr || size == 0 || (size % 16u) != 0u)
+            return false;
+
+        const auto roundKeys = CreateLeaRoundKeys();
+        for (std::size_t offset = 0; offset < size; offset += 16u)
+        {
+            std::array<std::uint32_t, 4> state{};
+            std::array<std::uint32_t, 4> next{};
+            for (std::size_t word = 0; word < state.size(); ++word)
+                state[word] = ReadLittleEndian32(source + offset + word * 4u);
+
+            for (unsigned int round = 0; round < 32u; ++round)
+            {
+                const std::uint32_t* key = roundKeys.data() + (31u - round) * 6u;
+                next[0] = state[3];
+                next[1] = (RotateRight(state[0], 9u) - (next[0] ^ key[0])) ^ key[1];
+                next[2] = (RotateLeft(state[1], 5u) - (next[1] ^ key[2])) ^ key[3];
+                next[3] = (RotateLeft(state[2], 3u) - (next[2] ^ key[4])) ^ key[5];
+                state = next;
+            }
+
+            for (std::size_t word = 0; word < state.size(); ++word)
+                WriteLittleEndian32(destination + offset + word * 4u, state[word]);
+        }
+        return true;
+    }
+}
+
 
 bool BMD::Open2(const wchar_t* DirName, const wchar_t* ModelFileName, bool bReAlloc)
 {
@@ -2749,6 +2937,33 @@ bool BMD::Open2(const wchar_t* DirName, const wchar_t* ModelFileName, bool bReAl
         }
 
         MapFileDecrypt(decryptedData.get(), encData, encSize);
+        ptr = 0;
+    }
+    else if (Version == 0xF)
+    {
+        if (dataSize < 8)
+        {
+            m_bCompletedAlloc = false;
+            return false;
+        }
+
+        const std::int32_t encSize = static_cast<std::int32_t>(
+            ReadLittleEndian32(fileData.get() + ptr));
+        ptr += sizeof(std::int32_t);
+        if (encSize <= 0 || (encSize % 16) != 0 || ptr + encSize > dataSize)
+        {
+            wprintf(L"[Open2] Invalid LEA payload in %.64s\n", ModelPath);
+            m_bCompletedAlloc = false;
+            return false;
+        }
+
+        decryptedData.reset(new(std::nothrow) unsigned char[encSize]);
+        if (!decryptedData
+            || !DecryptLea256Ecb(decryptedData.get(), fileData.get() + ptr, encSize))
+        {
+            m_bCompletedAlloc = false;
+            return false;
+        }
         ptr = 0;
     }
     else if (Version == 0xE)

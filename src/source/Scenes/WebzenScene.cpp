@@ -11,6 +11,9 @@
 #include "Engine/Object/ZzzOpenData.h"
 #include "UI/Legacy/UIMng.h"
 #include "UI/NewUI/NewUISystem.h"
+#ifdef _EDITOR
+#include "Network/Server/WSclient.h"
+#endif
 
 // External declarations
 extern EGameScene SceneFlag;
@@ -132,6 +135,15 @@ void WebzenScene(HDC hDC)
     UnloadTitleBitmaps();
 
     g_ErrorReport.Write(L"> Loading ok.\r\n");
+
+#ifdef _EDITOR
+    if (wcsstr(GetCommandLineW(), L"--character-map-editor") != nullptr)
+    {
+        CurrentProtocolState = RECEIVE_CHARACTERS_LIST;
+        SceneFlag = CHARACTER_SCENE;
+        return;
+    }
+#endif
 
     SceneFlag = LOG_IN_SCENE;
 }

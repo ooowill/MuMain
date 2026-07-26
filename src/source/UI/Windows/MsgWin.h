@@ -3,6 +3,8 @@
 //*****************************************************************************
 #pragma once
 
+#include <string>
+
 #include "UI/Widgets/Win.h"
 #include "UI/Widgets/Button.h"
 
@@ -30,6 +32,7 @@ protected:
     MSG_WIN_TYPE	m_eType;
     short			m_nGameExit;
     double			m_dDeltaTickSum;
+    std::wstring    m_exclusiveNameStoreUrl;
 
 public:
     CMsgWin();

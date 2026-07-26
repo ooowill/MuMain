@@ -687,10 +687,10 @@ void DefaultCamera::SetCameraAngle()
     {
         m_State.Angle[0] = -84.5f;
         m_State.Angle[1] = 0.0f;
-        m_State.Angle[2] = -75.0f;
-        m_State.Position[0] = 9758.93f;
-        m_State.Position[1] = 18913.11f;
-        m_State.Position[2] = 675.5f;
+        m_State.Angle[2] = -80.0f;
+        m_State.Position[0] = 15215.088867f;
+        m_State.Position[1] = 12186.536133f;
+        m_State.Position[2] = 529.371704f;
     }
     else
     {

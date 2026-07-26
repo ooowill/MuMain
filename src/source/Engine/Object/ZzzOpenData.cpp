@@ -21,6 +21,8 @@
 #include "UI/Legacy/UIMng.h"
 #include "Data/DataHandler/LoadData.h"
 #include "World/MapInfra/MapManager.h"
+#include "World/GameMaps/LoginSceneEnvironment.h"
+#include "Character/CharacterSceneTextures.h"
 #include "GameLogic/Events/Event.h"
 #include "GameLogic/Items/ChangeRingManager.h"
 #include "UI/NewUI/NewUISystem.h"
@@ -909,6 +911,31 @@ void OpenItems()
     for (int i = 0; i < 2; i++)
         gLoadData.AccessModel(MODEL_POTION + i + 13, L"Data\\Item\\", L"Jewel", i + 1);
 
+    struct CustomJewelModel
+    {
+        int Number;
+        const wchar_t* ModelName;
+    };
+
+    const CustomJewelModel customJewelModels[] =
+    {
+        { 200, L"CJGradeVI" },
+        { 201, L"CJGradeIX" },
+        { 202, L"CJGreater" },
+        { 203, L"CJExChange" },
+        { 204, L"CJLuck" },
+        { 205, L"CJSkill" },
+        { 206, L"CJGradeXV" },
+        { 207, L"CJFull" },
+        { 208, L"CJSocket" },
+        { 209, L"CJArmored" },
+        { 210, L"CJAncient" },
+        { 211, L"CJExcellent" },
+    };
+
+    for (const CustomJewelModel& customJewelModel : customJewelModels)
+        gLoadData.AccessModel(MODEL_POTION + customJewelModel.Number, L"Data\\Item\\", customJewelModel.ModelName, -1);
+
     gLoadData.AccessModel(MODEL_POTION + 15, L"Data\\Item\\", L"Gold", 1);
     gLoadData.AccessModel(MODEL_JEWEL_OF_LIFE, L"Data\\Item\\", L"Jewel", 3);
 
@@ -1354,6 +1381,9 @@ void OpenItemTextures()
         gLoadData.OpenTexture(MODEL_POTION + i, L"Item\\");
         gLoadData.OpenTexture(MODEL_ETC + i, L"Item\\");
     }
+
+    for (int i = 200; i <= 211; ++i)
+        gLoadData.OpenTexture(MODEL_POTION + i, L"Item\\");
 
     for (int i = 14; i <= 20; ++i)
         gLoadData.OpenTexture(MODEL_STAFF + i, L"Item\\");
@@ -5068,6 +5098,7 @@ void OpenLogoSceneData()
 
 void ReleaseLogoSceneData()
 {
+    LoginSceneEnvironment::Release();
     for (int i = BITMAP_LOG_IN; i <= BITMAP_LOG_IN_END; ++i)
         ::DeleteBitmap(i);
     for (int i = BITMAP_TEMP; i < BITMAP_TEMP + 30; i++)
@@ -5087,10 +5118,23 @@ void OpenCharacterSceneData()
     LoadBitmap(L"Interface\\b_connect.tga", BITMAP_LOG_IN + 5);
     LoadBitmap(L"Interface\\b_delete.tga", BITMAP_LOG_IN + 6);
     LoadBitmap(L"Interface\\character_ex.tga", BITMAP_LOG_IN + 7);
+    LoadBitmap(L"Interface\\CharacterS21\\select_row_normal.tga", CharacterSceneTextures::SelectRowNormal, GL_LINEAR, GL_CLAMP_TO_EDGE);
+    LoadBitmap(L"Interface\\CharacterS21\\select_row_active.tga", CharacterSceneTextures::SelectRowActive, GL_LINEAR, GL_CLAMP_TO_EDGE);
+    LoadBitmap(L"Interface\\CharacterS21\\select_arrow_up.tga", CharacterSceneTextures::SelectArrowUp, GL_LINEAR, GL_CLAMP_TO_EDGE);
     ::LoadBitmap(L"Interface\\server_ex03.tga", BITMAP_LOG_IN + 11, GL_NEAREST, GL_REPEAT);
     ::LoadBitmap(L"Interface\\server_ex01.tga", BITMAP_LOG_IN + 12);
     ::LoadBitmap(L"Interface\\server_ex02.jpg", BITMAP_LOG_IN + 13, GL_NEAREST, GL_REPEAT);
+    LoadBitmap(L"Interface\\CharacterS21\\select_arrow_down.tga", CharacterSceneTextures::SelectArrowDown, GL_LINEAR, GL_CLAMP_TO_EDGE);
+    LoadBitmap(L"Interface\\CharacterS21\\create_deco.tga", CharacterSceneTextures::CreateDecoration, GL_LINEAR, GL_CLAMP_TO_EDGE);
+    LoadBitmap(L"Interface\\CharacterS21\\create_class_button.tga", CharacterSceneTextures::CreateClassButton, GL_LINEAR, GL_CLAMP_TO_EDGE);
+    LoadBitmap(L"Interface\\CharacterS21\\create_action_button.tga", CharacterSceneTextures::CreateActionButton, GL_LINEAR, GL_CLAMP_TO_EDGE);
+    LoadBitmap(L"Interface\\CharacterS21\\create_input.tga", CharacterSceneTextures::CreateInput, GL_LINEAR, GL_CLAMP_TO_EDGE);
+    LoadBitmap(L"Interface\\CharacterS21\\select_row_hover.tga", CharacterSceneTextures::SelectRowHover, GL_LINEAR, GL_CLAMP_TO_EDGE);
+    LoadBitmap(L"Interface\\CharacterS21\\select_row_selected.tga", CharacterSceneTextures::SelectRowSelected, GL_LINEAR, GL_CLAMP_TO_EDGE);
     LoadBitmap(L"Effect\\Impack03.jpg", BITMAP_EXT_LOG_IN + 2);
+    LoadBitmap(L"Interface\\CharacterS21\\create_class_beam.tga", CharacterSceneTextures::CreateClassBeam, GL_LINEAR, GL_CLAMP_TO_EDGE);
+    LoadBitmap(L"Interface\\i_attack.tga", CharacterSceneTextures::SelectPowerIcon, GL_LINEAR, GL_CLAMP_TO_EDGE);
+    LoadBitmap(L"Interface\\Azoth\\azoth_digits.tga", CharacterSceneTextures::SelectPowerDigits, GL_LINEAR, GL_CLAMP_TO_EDGE);
     LoadBitmap(L"Logo\\chasellight.jpg", BITMAP_EFFECT);
 
     int Class = MAX_CLASS;
@@ -5120,7 +5164,10 @@ void ReleaseCharacterSceneData()
     for (int i = BITMAP_LOG_IN; i <= BITMAP_LOG_IN_END; ++i)
         ::DeleteBitmap(i);
 
-    for (int i = BITMAP_TEMP; i < BITMAP_EXT_LOG_IN + 7; i++)
+    for (int i = BITMAP_EXT_LOG_IN; i <= BITMAP_EXT_LOG_IN_END; ++i)
+        DeleteBitmap(i);
+
+    for (int i = CharacterSceneTextures::Begin; i < CharacterSceneTextures::End; ++i)
         DeleteBitmap(i);
 
     gMapManager.DeleteObjects();

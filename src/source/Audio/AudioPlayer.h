@@ -24,5 +24,16 @@ namespace AudioPlayer
     // values fall back to DefaultVolumeLevel.
     void SetMusicVolume(int level);
 
+    // Runtime gain for the current map music, multiplied by the saved music
+    // volume.  Used for local fades such as the Lorencia bar ambience.
+    void SetMainMusicFade(float gain);
+
+    // Secondary looped music layer for local ambience.  It respects the saved
+    // music volume and is intentionally separate from PlayMp3/StopMp3 so map
+    // music can keep playing once while ambience fades in and out.
+    void PlayAmbientLoop(const char* path, float gain);
+    void StopAmbient(const char* path = nullptr);
+    void SetAmbientGain(float gain);
+
     int ClampVolume(int level);
 }

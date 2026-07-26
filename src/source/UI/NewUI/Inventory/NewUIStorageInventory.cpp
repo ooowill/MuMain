@@ -225,16 +225,7 @@ void CNewUIStorageInventory::RenderText()
     g_pRenderText->SetTextColor(240, 64, 64, 255);
     g_pRenderText->RenderText(m_Pos.x + 10 + 15, m_Pos.y + 342 + 29, I18N::Game::StorageFee);
 
-    __int64 iTotalLevel = (__int64)CharacterAttribute->Level + Master_Level_Data.nMLevel;
-
-    nTempZen = int(double(iTotalLevel) * double(iTotalLevel) * 0.04);
-    nTempZen += m_bLock ? int(CharacterAttribute->Level) * 2 : 0;
-    nTempZen = std::max<int>(1, nTempZen);
-
-    if (nTempZen >= 1000)
-        nTempZen = nTempZen / 100 * 100;
-    else if (nTempZen >= 100)
-        nTempZen = nTempZen / 10 * 10;
+    nTempZen = 0;
 
     ConvertGold(nTempZen, szTemp);
     g_pRenderText->SetTextColor(255, 220, 150, 255);

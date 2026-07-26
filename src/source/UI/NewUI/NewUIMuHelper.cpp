@@ -3,6 +3,10 @@
 #include <algorithm>
 #include <vector>
 #include <array>
+#include <cwctype>
+#include <filesystem>
+#include <fstream>
+#include <string>
 #include "I18N/All.h"
 
 #include "UI/Legacy/UIControls.h"
@@ -10,6 +14,7 @@
 #include "UI/NewUI/NewUISystem.h"
 #include "UI/NewUI/NewUIMuHelper.h"
 #include "Character/CharacterManager.h"
+#include "Engine/Object/ZzzInterface.h"
 #include "MUHelper/MuHelper.h"
 
 using namespace MUHelper;
@@ -45,7 +50,13 @@ enum ECheckBoxId: uint16_t
     CHECKBOX_ID_DR_ATTACK_CEASE,
     CHECKBOX_ID_DR_ATTACK_AUTO,
     CHECKBOX_ID_DR_ATTACK_TOGETHER,
-    CHECKBOX_ID_FALLBACK_BASIC_ATTACK
+    CHECKBOX_ID_FALLBACK_BASIC_ATTACK,
+    CHECKBOX_ID_PICK_USABLE_ONLY,
+    CHECKBOX_ID_PICK_COMMON,
+    CHECKBOX_ID_PICK_EVENT,
+    CHECKBOX_ID_AUTO_AZOTH,
+    CHECKBOX_ID_AUTO_RESET,
+    CHECKBOX_ID_AUTO_DISTRIBUTE
 };
 
 enum EButtonId : uint16_t
@@ -63,6 +74,18 @@ enum EButtonId : uint16_t
     BUTTON_ID_PICK_RANGE_MINUS,
     BUTTON_ID_ADD_OTHER_ITEM,
     BUTTON_ID_DELETE_OTHER_ITEM,
+    BUTTON_ID_MIN_OPTION_ADD,
+    BUTTON_ID_MIN_OPTION_MINUS,
+    BUTTON_ID_POINT_STR_ADD,
+    BUTTON_ID_POINT_STR_MINUS,
+    BUTTON_ID_POINT_AGI_ADD,
+    BUTTON_ID_POINT_AGI_MINUS,
+    BUTTON_ID_POINT_VIT_ADD,
+    BUTTON_ID_POINT_VIT_MINUS,
+    BUTTON_ID_POINT_ENE_ADD,
+    BUTTON_ID_POINT_ENE_MINUS,
+    BUTTON_ID_POINT_CMD_ADD,
+    BUTTON_ID_POINT_CMD_MINUS,
     BUTTON_ID_SAVE_CONFIG,
     BUTTON_ID_INIT_CONFIG,
     BUTTON_ID_EXIT_CONFIG
@@ -106,6 +129,162 @@ enum ESkillSlot
 using namespace SEASON3B;
 
 ConfigData _TempConfig;
+
+namespace
+{
+    const wchar_t* kTabCharacter = L"Character";
+    const wchar_t* kPickUsableOnly = L"Apenas Drops Proprios";
+    const wchar_t* kPickCommon = L"Itens comuns";
+    const wchar_t* kPickAncient = L"Ancient Item";
+    const wchar_t* kAutoAzoth = L"Zen para Azoth Auto";
+    const wchar_t* kAutoReset = L"Reset auto";
+    bool g_MuHelperPendingConfigSync = false;
+    bool g_MuHelperHasLoadedConfig = false;
+    std::wstring g_MuHelperLoadedCharacterName;
+
+    int ClampNumberInputValue(int value)
+    {
+        return std::clamp(value, 0, 999);
+    }
+
+    void SetNumberInputText(CUITextInputBox& input, int value)
+    {
+        wchar_t text[16] = { 0 };
+        swprintf_s(text, L"%d", ClampNumberInputValue(value));
+        input.SetText(text);
+    }
+
+    void NormalizeConfigForUi(ConfigData& config)
+    {
+        config.iHuntingRange = std::clamp(config.iHuntingRange, 1, MAX_HUNTING_RANGE);
+        config.iObtainingRange = std::clamp(config.iObtainingRange, 1, MAX_OBTAINING_RANGE);
+        config.iMaxSecondsAway = ClampNumberInputValue(config.iMaxSecondsAway);
+        config.aiSkillInterval[1] = ClampNumberInputValue(config.aiSkillInterval[1]);
+        config.aiSkillInterval[2] = ClampNumberInputValue(config.aiSkillInterval[2]);
+        config.iBuffCastInterval = ClampNumberInputValue(config.iBuffCastInterval);
+        config.iPotionThreshold = std::clamp(config.iPotionThreshold, 0, 100);
+        config.iHealThreshold = std::clamp(config.iHealThreshold, 0, 100);
+        config.iHealPartyThreshold = std::clamp(config.iHealPartyThreshold, 0, 100);
+        config.iMinimumOptionLevel = std::clamp(config.iMinimumOptionLevel, 0, 16);
+        config.bAutoDistributePoints = true;
+        config.bPickEventItems = false;
+
+        for (auto& percent : config.aAutoPointPercent)
+        {
+            percent = static_cast<uint8_t>(std::clamp<int>(percent, 0, 100));
+        }
+    }
+
+    bool ResolveMuHelperCharacterName(std::wstring& characterName)
+    {
+        characterName.clear();
+
+        if (CharacterAttribute != nullptr && CharacterAttribute->Name[0] != L'\0')
+        {
+            characterName = CharacterAttribute->Name;
+        }
+        else if (Hero != nullptr && Hero->ID[0] != L'\0')
+        {
+            characterName = Hero->ID;
+        }
+
+        return !characterName.empty();
+    }
+
+    std::wstring MakeMuHelperSafeFileName(const std::wstring& value)
+    {
+        std::wstring result;
+        result.reserve(value.size());
+        for (const wchar_t ch : value)
+        {
+            if (std::iswalnum(ch) || ch == L'_' || ch == L'-')
+            {
+                result.push_back(ch);
+            }
+            else
+            {
+                result.push_back(L'_');
+            }
+        }
+
+        return result.empty() ? L"unknown" : result;
+    }
+
+    std::filesystem::path ResolveLocalMuHelperConfigPath()
+    {
+        std::wstring characterName;
+        if (!ResolveMuHelperCharacterName(characterName))
+        {
+            return {};
+        }
+
+        return std::filesystem::path(L"Data")
+            / L"Local"
+            / L"MuHelper"
+            / (MakeMuHelperSafeFileName(characterName) + L".bin");
+    }
+
+    ConfigData CreateLocalPersistentConfig(ConfigData config)
+    {
+        return config;
+    }
+
+    bool SaveLocalMuHelperConfig(const ConfigData& config)
+    {
+        const auto path = ResolveLocalMuHelperConfigPath();
+        if (path.empty())
+        {
+            return false;
+        }
+
+        std::error_code ec;
+        std::filesystem::create_directories(path.parent_path(), ec);
+        if (ec)
+        {
+            return false;
+        }
+
+        PRECEIVE_MUHELPER_DATA packet{};
+        auto persistentConfig = CreateLocalPersistentConfig(config);
+        NormalizeConfigForUi(persistentConfig);
+        ConfigDataSerDe::Serialize(persistentConfig, packet);
+
+        std::ofstream file(path, std::ios::binary | std::ios::trunc);
+        if (!file)
+        {
+            return false;
+        }
+
+        file.write(reinterpret_cast<const char*>(&packet), sizeof(packet));
+        return file.good();
+    }
+
+    bool TryLoadLocalMuHelperConfig(ConfigData& config)
+    {
+        const auto path = ResolveLocalMuHelperConfigPath();
+        if (path.empty() || !std::filesystem::exists(path))
+        {
+            return false;
+        }
+
+        PRECEIVE_MUHELPER_DATA packet{};
+        std::ifstream file(path, std::ios::binary);
+        if (!file)
+        {
+            return false;
+        }
+
+        file.read(reinterpret_cast<char*>(&packet), sizeof(packet));
+        if (file.gcount() != sizeof(packet))
+        {
+            return false;
+        }
+
+        ConfigDataSerDe::Deserialize(packet, config);
+        NormalizeConfigForUi(config);
+        return true;
+    }
+}
 
 CNewUIMuHelper::CNewUIMuHelper()
 {
@@ -173,7 +352,7 @@ void CNewUIMuHelper::InitButtons()
     std::list<const wchar_t* const*> ltext;
     ltext.push_back(&I18N::Game::Hunting);
     ltext.push_back(&I18N::Game::Obtaining);
-    ltext.push_back(&I18N::Game::OtherSettings);
+    ltext.push_back(&kTabCharacter);
 
     m_TabBtn.CreateRadioGroup(3, IMAGE_WINDOW_TAB_BTN, TRUE);
     m_TabBtn.ChangeRadioText(ltext);
@@ -192,8 +371,21 @@ void CNewUIMuHelper::InitButtons()
 
     InsertButton(IMAGE_CHAINFO_BTN_STAT, m_Pos.x + 56, m_Pos.y + 78, 16, 15, 0, 0, 0, 0, nullptr, nullptr, BUTTON_ID_PICK_RANGE_ADD, 1);
     InsertButton(IMAGE_MACROUI_HELPER_RAGEMINUS, m_Pos.x + 56, m_Pos.y + 97, 16, 15, 0, 0, 0, 0, nullptr, nullptr, BUTTON_ID_PICK_RANGE_MINUS, 1);
-    InsertButton(IMAGE_CLEARNESS_BTN, m_Pos.x + 132, m_Pos.y + 208, 38, 24, 1, 0, 1, 1, &I18N::Game::Add, nullptr, BUTTON_ID_ADD_OTHER_ITEM, 1); //-- Buff
+    InsertButton(IMAGE_CLEARNESS_BTN, m_Pos.x + 132, m_Pos.y + 232, 38, 24, 1, 0, 1, 1, &I18N::Game::Add, nullptr, BUTTON_ID_ADD_OTHER_ITEM, 1); //-- Buff
     InsertButton(IMAGE_CLEARNESS_BTN, m_Pos.x + 132, m_Pos.y + 309, 38, 24, 1, 0, 1, 1, &I18N::Game::Delete, nullptr, BUTTON_ID_DELETE_OTHER_ITEM, 1); //-- Buff
+    InsertButton(IMAGE_CHAINFO_BTN_STAT, m_Pos.x + 151, m_Pos.y + 342, 16, 15, 0, 0, 0, 0, nullptr, nullptr, BUTTON_ID_MIN_OPTION_ADD, 1);
+    InsertButton(IMAGE_MACROUI_HELPER_RAGEMINUS, m_Pos.x + 132, m_Pos.y + 342, 16, 15, 0, 0, 0, 0, nullptr, nullptr, BUTTON_ID_MIN_OPTION_MINUS, 1);
+
+    InsertButton(IMAGE_CHAINFO_BTN_STAT, m_Pos.x + 151, m_Pos.y + 183, 16, 15, 0, 0, 0, 0, nullptr, nullptr, BUTTON_ID_POINT_STR_ADD, 2);
+    InsertButton(IMAGE_MACROUI_HELPER_RAGEMINUS, m_Pos.x + 132, m_Pos.y + 183, 16, 15, 0, 0, 0, 0, nullptr, nullptr, BUTTON_ID_POINT_STR_MINUS, 2);
+    InsertButton(IMAGE_CHAINFO_BTN_STAT, m_Pos.x + 151, m_Pos.y + 205, 16, 15, 0, 0, 0, 0, nullptr, nullptr, BUTTON_ID_POINT_AGI_ADD, 2);
+    InsertButton(IMAGE_MACROUI_HELPER_RAGEMINUS, m_Pos.x + 132, m_Pos.y + 205, 16, 15, 0, 0, 0, 0, nullptr, nullptr, BUTTON_ID_POINT_AGI_MINUS, 2);
+    InsertButton(IMAGE_CHAINFO_BTN_STAT, m_Pos.x + 151, m_Pos.y + 227, 16, 15, 0, 0, 0, 0, nullptr, nullptr, BUTTON_ID_POINT_VIT_ADD, 2);
+    InsertButton(IMAGE_MACROUI_HELPER_RAGEMINUS, m_Pos.x + 132, m_Pos.y + 227, 16, 15, 0, 0, 0, 0, nullptr, nullptr, BUTTON_ID_POINT_VIT_MINUS, 2);
+    InsertButton(IMAGE_CHAINFO_BTN_STAT, m_Pos.x + 151, m_Pos.y + 249, 16, 15, 0, 0, 0, 0, nullptr, nullptr, BUTTON_ID_POINT_ENE_ADD, 2);
+    InsertButton(IMAGE_MACROUI_HELPER_RAGEMINUS, m_Pos.x + 132, m_Pos.y + 249, 16, 15, 0, 0, 0, 0, nullptr, nullptr, BUTTON_ID_POINT_ENE_MINUS, 2);
+    InsertButton(IMAGE_CHAINFO_BTN_STAT, m_Pos.x + 151, m_Pos.y + 271, 16, 15, 0, 0, 0, 0, nullptr, nullptr, BUTTON_ID_POINT_CMD_ADD, 2);
+    InsertButton(IMAGE_MACROUI_HELPER_RAGEMINUS, m_Pos.x + 132, m_Pos.y + 271, 16, 15, 0, 0, 0, 0, nullptr, nullptr, BUTTON_ID_POINT_CMD_MINUS, 2);
     //--
     InsertButton(IMAGE_IGS_BUTTON, m_Pos.x + 120, m_Pos.y + 388, 52, 26, 1, 0, 1, 1, &I18N::Game::SaveSetting, nullptr, BUTTON_ID_SAVE_CONFIG, -1);
     InsertButton(IMAGE_IGS_BUTTON, m_Pos.x + 65, m_Pos.y + 388, 52, 26, 1, 0, 1, 1, &I18N::Game::Initialization, nullptr, BUTTON_ID_INIT_CONFIG, -1);
@@ -206,6 +398,18 @@ void CNewUIMuHelper::InitButtons()
     RegisterBtnCharacter(0xFF, BUTTON_ID_PICK_RANGE_MINUS);
     RegisterBtnCharacter(0xFF, BUTTON_ID_ADD_OTHER_ITEM);
     RegisterBtnCharacter(0xFF, BUTTON_ID_DELETE_OTHER_ITEM);
+    RegisterBtnCharacter(0xFF, BUTTON_ID_MIN_OPTION_ADD);
+    RegisterBtnCharacter(0xFF, BUTTON_ID_MIN_OPTION_MINUS);
+    RegisterBtnCharacter(0xFF, BUTTON_ID_POINT_STR_ADD);
+    RegisterBtnCharacter(0xFF, BUTTON_ID_POINT_STR_MINUS);
+    RegisterBtnCharacter(0xFF, BUTTON_ID_POINT_AGI_ADD);
+    RegisterBtnCharacter(0xFF, BUTTON_ID_POINT_AGI_MINUS);
+    RegisterBtnCharacter(0xFF, BUTTON_ID_POINT_VIT_ADD);
+    RegisterBtnCharacter(0xFF, BUTTON_ID_POINT_VIT_MINUS);
+    RegisterBtnCharacter(0xFF, BUTTON_ID_POINT_ENE_ADD);
+    RegisterBtnCharacter(0xFF, BUTTON_ID_POINT_ENE_MINUS);
+    RegisterBtnCharacter(0xFF, BUTTON_ID_POINT_CMD_ADD);
+    RegisterBtnCharacter(0xFF, BUTTON_ID_POINT_CMD_MINUS);
     RegisterBtnCharacter(0xFF, BUTTON_ID_SAVE_CONFIG);
     RegisterBtnCharacter(0xFF, BUTTON_ID_INIT_CONFIG);
     RegisterBtnCharacter(0xFF, BUTTON_ID_EXIT_CONFIG);
@@ -251,14 +455,14 @@ void CNewUIMuHelper::InitCheckBox()
     InsertCheckBox(IMAGE_CHECKBOX_BTN, m_Pos.x + 79, m_Pos.y + 97, 15, 15, 0, &I18N::Game::DrainLife, CHECKBOX_ID_DRAIN_LIFE, 0);
 
     InsertCheckBox(IMAGE_CHECKBOX_BTN, m_Pos.x + 79, m_Pos.y + 80, 15, 15, 0, &I18N::Game::RepairItem, CHECKBOX_ID_REPAIR_ITEM, 1);
-    InsertCheckBox(IMAGE_CHECKBOX_BTN, m_Pos.x + 17, m_Pos.y + 125, 15, 15, 0, &I18N::Game::PickAllNearItems, CHECKBOX_ID_PICK_ALL, 1);
-    InsertCheckBox(IMAGE_CHECKBOX_BTN, m_Pos.x + 17, m_Pos.y + 152, 15, 15, 0, &I18N::Game::PickSelectedItems, CHECKBOX_ID_PICK_SELECTED, 1);
-
-    InsertCheckBox(IMAGE_CHECKBOX_BTN, m_Pos.x + 22, m_Pos.y + 170, 15, 15, 0, &I18N::Game::JewelGem, CHECKBOX_ID_PICK_JEWEL, 1);
-    InsertCheckBox(IMAGE_CHECKBOX_BTN, m_Pos.x + 85, m_Pos.y + 170, 15, 15, 0, &I18N::Game::SetItem, CHECKBOX_ID_PICK_ANCIENT, 1);
-    InsertCheckBox(IMAGE_CHECKBOX_BTN, m_Pos.x + 22, m_Pos.y + 185, 15, 15, 0, &I18N::Game::Zen, CHECKBOX_ID_PICK_ZEN, 1);
-    InsertCheckBox(IMAGE_CHECKBOX_BTN, m_Pos.x + 85, m_Pos.y + 185, 15, 15, 0, &I18N::Game::ExcellentItem, CHECKBOX_ID_PICK_EXCELLENT, 1);
-    InsertCheckBox(IMAGE_CHECKBOX_BTN, m_Pos.x + 22, m_Pos.y + 200, 15, 15, 0, &I18N::Game::AddExtraItem, CHECKBOX_ID_ADD_OTHER_ITEM, 1);
+    InsertCheckBox(IMAGE_CHECKBOX_BTN, m_Pos.x + 17, m_Pos.y + 125, 15, 15, 0, &I18N::Game::Zen, CHECKBOX_ID_PICK_ZEN, 1);
+    InsertCheckBox(IMAGE_CHECKBOX_BTN, m_Pos.x + 17, m_Pos.y + 142, 15, 15, 0, &kAutoAzoth, CHECKBOX_ID_AUTO_AZOTH, 1);
+    InsertCheckBox(IMAGE_CHECKBOX_BTN, m_Pos.x + 17, m_Pos.y + 159, 15, 15, 0, &I18N::Game::JewelGem, CHECKBOX_ID_PICK_JEWEL, 1);
+    InsertCheckBox(IMAGE_CHECKBOX_BTN, m_Pos.x + 17, m_Pos.y + 176, 15, 15, 0, &kPickUsableOnly, CHECKBOX_ID_PICK_USABLE_ONLY, 1);
+    InsertCheckBox(IMAGE_CHECKBOX_BTN, m_Pos.x + 92, m_Pos.y + 125, 15, 15, 0, &I18N::Game::ExcellentItem, CHECKBOX_ID_PICK_EXCELLENT, 1);
+    InsertCheckBox(IMAGE_CHECKBOX_BTN, m_Pos.x + 92, m_Pos.y + 142, 15, 15, 0, &kPickAncient, CHECKBOX_ID_PICK_ANCIENT, 1);
+    InsertCheckBox(IMAGE_CHECKBOX_BTN, m_Pos.x + 92, m_Pos.y + 159, 15, 15, 0, &kPickCommon, CHECKBOX_ID_PICK_COMMON, 1);
+    InsertCheckBox(IMAGE_CHECKBOX_BTN, m_Pos.x + 92, m_Pos.y + 176, 15, 15, 0, &I18N::Game::AddExtraItem, CHECKBOX_ID_ADD_OTHER_ITEM, 1);
     //--
 
     InsertCheckBox(IMAGE_MACROUI_HELPER_OPTIONBUTTON, m_Pos.x + 94, m_Pos.y + 235, 15, 15, 0, &I18N::Game::CeaseAttack, CHECKBOX_ID_DR_ATTACK_CEASE, 0);
@@ -266,9 +470,7 @@ void CNewUIMuHelper::InitCheckBox()
     InsertCheckBox(IMAGE_MACROUI_HELPER_OPTIONBUTTON, m_Pos.x + 30, m_Pos.y + 250, 15, 15, 0, &I18N::Game::AttackTogether, CHECKBOX_ID_DR_ATTACK_TOGETHER, 0);
 
     //--
-    InsertCheckBox(IMAGE_CHECKBOX_BTN, m_Pos.x + 18, m_Pos.y + 80, 15, 15, 0, &I18N::Game::AutoAcceptFriend, CHECKBOX_ID_AUTO_ACCEPT_FRIEND, 2);
-    InsertCheckBox(IMAGE_CHECKBOX_BTN, m_Pos.x + 18, m_Pos.y + 125, 15, 15, 0, &I18N::Game::PVPCounterattack, CHECKBOX_ID_AUTO_DEFEND, 2);
-    InsertCheckBox(IMAGE_CHECKBOX_BTN, m_Pos.x + 18, m_Pos.y + 97, 15, 15, 0, &I18N::Game::AutoAcceptGuildMember, CHECKBOX_ID_AUTO_ACCEPT_GUILD, 2);
+    InsertCheckBox(IMAGE_CHECKBOX_BTN, m_Pos.x + 18, m_Pos.y + 80, 15, 15, 0, &kAutoReset, CHECKBOX_ID_AUTO_RESET, 2);
 
     RegisterBoxCharacter(0xFF, CHECKBOX_ID_POTION);
     RegisterBoxCharacter(0xFF, CHECKBOX_ID_LONG_DISTANCE);
@@ -279,6 +481,10 @@ void CNewUIMuHelper::InitCheckBox()
     RegisterBoxCharacter(0xFF, CHECKBOX_ID_REPAIR_ITEM);
     RegisterBoxCharacter(0xFF, CHECKBOX_ID_PICK_ALL);
     RegisterBoxCharacter(0xFF, CHECKBOX_ID_PICK_SELECTED);
+    RegisterBoxCharacter(0xFF, CHECKBOX_ID_PICK_USABLE_ONLY);
+    RegisterBoxCharacter(0xFF, CHECKBOX_ID_PICK_COMMON);
+    RegisterBoxCharacter(0xFF, CHECKBOX_ID_PICK_EVENT);
+    RegisterBoxCharacter(0xFF, CHECKBOX_ID_AUTO_AZOTH);
     RegisterBoxCharacter(0xFF, CHECKBOX_ID_PICK_JEWEL);
     RegisterBoxCharacter(0xFF, CHECKBOX_ID_PICK_ANCIENT);
     RegisterBoxCharacter(0xFF, CHECKBOX_ID_PICK_ZEN);
@@ -288,6 +494,8 @@ void CNewUIMuHelper::InitCheckBox()
     RegisterBoxCharacter(0xFF, CHECKBOX_ID_AUTO_DEFEND);
     RegisterBoxCharacter(0xFF, CHECKBOX_ID_AUTO_ACCEPT_GUILD);
     RegisterBoxCharacter(0xFF, CHECKBOX_ID_FALLBACK_BASIC_ATTACK);
+    RegisterBoxCharacter(0xFF, CHECKBOX_ID_AUTO_RESET);
+    RegisterBoxCharacter(0xFF, CHECKBOX_ID_AUTO_DISTRIBUTE);
 
     RegisterBoxCharacter(Dark_Knight, CHECKBOX_ID_SKILL3_DELAY);
     RegisterBoxCharacter(Dark_Knight, CHECKBOX_ID_SKILL3_CONDITION);
@@ -330,7 +538,7 @@ void CNewUIMuHelper::InitImage()
     InsertIcon(IMAGE_MACROUI_HELPER_INPUTNUMBER, m_Pos.x + 140, m_Pos.y + 137, 20, 15, TEXTBOX_IMG_DISTANCE_TIME, 0);
     InsertIcon(IMAGE_MACROUI_HELPER_INPUTNUMBER, m_Pos.x + 140, m_Pos.y + 174, 20, 15, TEXTBOX_IMG_SKILL1_TIME, 0);
     InsertIcon(IMAGE_MACROUI_HELPER_INPUTNUMBER, m_Pos.x + 140, m_Pos.y + 226, 20, 15, TEXTBOX_IMG_SKILL2_TIME, 0);
-    InsertIcon(IMAGE_MACROUI_HELPER_INPUTSTRING, m_Pos.x + 34, m_Pos.y + 216, 94, 15, TEXTBOX_IMG_ADD_EXTRA_ITEM, 1);
+    InsertIcon(IMAGE_MACROUI_HELPER_INPUTSTRING, m_Pos.x + 34, m_Pos.y + 240, 94, 15, TEXTBOX_IMG_ADD_EXTRA_ITEM, 1);
 
     RegisterIconCharacter(0xFF, SKILL_SLOT_SKILL1);
     RegisterIconCharacter(0xFF, SKILL_SLOT_SKILL2);
@@ -400,8 +608,6 @@ void CNewUIMuHelper::InitText()
 
 void CNewUIMuHelper::InitTextboxInput()
 {
-    wchar_t wsInitText[MAX_NUMBER_DIGITS + 1];
-
     m_DistanceTimeInput.Init(g_hWnd, 17, 15, MAX_NUMBER_DIGITS, false);
     m_DistanceTimeInput.SetPosition(m_Pos.x + 142, m_Pos.y + 140);
     m_DistanceTimeInput.SetTextColor(255, 0, 0, 0);
@@ -409,8 +615,7 @@ void CNewUIMuHelper::InitTextboxInput()
     m_DistanceTimeInput.SetFont(g_hFont);
     m_DistanceTimeInput.SetState(UISTATE_NORMAL);
     m_DistanceTimeInput.SetOption(UIOPTION_NUMBERONLY);
-    std::swprintf(wsInitText, MAX_NUMBER_DIGITS + 1, L"%d", _TempConfig.iMaxSecondsAway);
-    m_DistanceTimeInput.SetText(wsInitText);
+    SetNumberInputText(m_DistanceTimeInput, _TempConfig.iMaxSecondsAway);
 
     m_Skill2DelayInput.Init(g_hWnd, 17, 15, MAX_NUMBER_DIGITS, false);
     m_Skill2DelayInput.SetPosition(m_Pos.x + 142, m_Pos.y + 177);
@@ -419,8 +624,7 @@ void CNewUIMuHelper::InitTextboxInput()
     m_Skill2DelayInput.SetFont(g_hFont);
     m_Skill2DelayInput.SetState(UISTATE_NORMAL);
     m_Skill2DelayInput.SetOption(UIOPTION_NUMBERONLY);
-    std::swprintf(wsInitText, MAX_NUMBER_DIGITS + 1, L"%d", _TempConfig.aiSkillInterval[1]);
-    m_Skill2DelayInput.SetText(wsInitText);
+    SetNumberInputText(m_Skill2DelayInput, _TempConfig.aiSkillInterval[1]);
 
     m_Skill3DelayInput.Init(g_hWnd, 17, 15, MAX_NUMBER_DIGITS, false);
     m_Skill3DelayInput.SetPosition(m_Pos.x + 142, m_Pos.y + 229);
@@ -429,18 +633,17 @@ void CNewUIMuHelper::InitTextboxInput()
     m_Skill3DelayInput.SetFont(g_hFont);
     m_Skill3DelayInput.SetState(UISTATE_NORMAL);
     m_Skill3DelayInput.SetOption(UIOPTION_NUMBERONLY);
-    std::swprintf(wsInitText, MAX_NUMBER_DIGITS + 1, L"%d", _TempConfig.aiSkillInterval[2]);
-    m_Skill3DelayInput.SetText(wsInitText);
+    SetNumberInputText(m_Skill3DelayInput, _TempConfig.aiSkillInterval[2]);
 
     m_ItemInput.Init(g_hWnd, 88, 15, MAX_ITEM_NAME, false);
-    m_ItemInput.SetPosition(m_Pos.x + 36, m_Pos.y + 219);
+    m_ItemInput.SetPosition(m_Pos.x + 36, m_Pos.y + 243);
     m_ItemInput.SetTextColor(255, 0, 0, 0);
-    m_ItemInput.SetBackColor(255, 255, 255, 255);
+    m_ItemInput.SetBackColor(0, 0, 0, 0);
     m_ItemInput.SetFont(g_hFont);
     m_ItemInput.SetState(UISTATE_HIDE);
 
     m_ItemFilter.SetSize(160, 70);
-    m_ItemFilter.SetPosition(m_Pos.x + 20, m_Pos.y + 238 + m_ItemFilter.GetHeight());
+    m_ItemFilter.SetPosition(m_Pos.x + 20, m_Pos.y + 262 + m_ItemFilter.GetHeight());
 }
 
 bool CNewUIMuHelper::Update()
@@ -467,6 +670,13 @@ bool CNewUIMuHelper::Update()
             m_Skill2DelayInput.SetState(UISTATE_HIDE);
             m_Skill3DelayInput.SetState(UISTATE_HIDE);
             m_ItemInput.SetState(UISTATE_NORMAL);
+        }
+        else
+        {
+            m_DistanceTimeInput.SetState(UISTATE_HIDE);
+            m_Skill2DelayInput.SetState(UISTATE_HIDE);
+            m_Skill3DelayInput.SetState(UISTATE_HIDE);
+            m_ItemInput.SetState(UISTATE_HIDE);
         }
     }
     return true;
@@ -508,6 +718,21 @@ bool CNewUIMuHelper::UpdateMouseEvent()
         else if (iButtonId == BUTTON_ID_DELETE_OTHER_ITEM)
         {
             RemoveExtraItem();
+        }
+        else if (iButtonId == BUTTON_ID_MIN_OPTION_ADD)
+        {
+            ApplyMinimumOptionUpdate(1);
+        }
+        else if (iButtonId == BUTTON_ID_MIN_OPTION_MINUS)
+        {
+            ApplyMinimumOptionUpdate(-1);
+        }
+        else if (iButtonId >= BUTTON_ID_POINT_STR_ADD && iButtonId <= BUTTON_ID_POINT_CMD_MINUS)
+        {
+            const int pointButtonOffset = iButtonId - BUTTON_ID_POINT_STR_ADD;
+            const int pointIndex = pointButtonOffset / 2;
+            const int delta = (pointButtonOffset % 2) == 0 ? 5 : -5;
+            ApplyAutoPointPercentUpdate(pointIndex, delta);
         }
         else if (iButtonId == BUTTON_ID_SKILL2_CONFIG)
         {
@@ -843,7 +1068,7 @@ void CNewUIMuHelper::ApplyConfigFromCheckbox(int iCheckboxId, bool bState)
     case CHECKBOX_ID_PICK_ALL:
 	{
 		auto cboxPickSelected = m_CheckBoxList[CHECKBOX_ID_PICK_SELECTED];
-		if (cboxPickSelected.box->GetBoxState())
+		if (cboxPickSelected.box != nullptr && cboxPickSelected.box->GetBoxState())
 		{
 			cboxPickSelected.box->RegisterBoxState(false);
 		}
@@ -854,13 +1079,26 @@ void CNewUIMuHelper::ApplyConfigFromCheckbox(int iCheckboxId, bool bState)
     case CHECKBOX_ID_PICK_SELECTED:
 	{
 		auto cboxPickAll = m_CheckBoxList[CHECKBOX_ID_PICK_ALL];
-		if (cboxPickAll.box->GetBoxState())
+		if (cboxPickAll.box != nullptr && cboxPickAll.box->GetBoxState())
 		{
 			cboxPickAll.box->RegisterBoxState(false);
 		}
 		_TempConfig.bPickSelectItems = bState;
 		break;
 	}
+
+    case CHECKBOX_ID_PICK_USABLE_ONLY:
+        _TempConfig.bPickOnlyUsableItems = bState;
+        break;
+
+    case CHECKBOX_ID_PICK_COMMON:
+        _TempConfig.bPickCommonItems = bState;
+        _TempConfig.bPickAllItems = bState;
+        break;
+
+    case CHECKBOX_ID_PICK_EVENT:
+        _TempConfig.bPickEventItems = bState;
+        break;
 
     case CHECKBOX_ID_PICK_JEWEL:
         _TempConfig.bPickJewel = bState;
@@ -896,6 +1134,18 @@ void CNewUIMuHelper::ApplyConfigFromCheckbox(int iCheckboxId, bool bState)
 
     case CHECKBOX_ID_FALLBACK_BASIC_ATTACK:
         _TempConfig.bFallbackBasicAttack = bState;
+        break;
+
+    case CHECKBOX_ID_AUTO_AZOTH:
+        _TempConfig.bAutoConvertZenToAzoth = bState;
+        break;
+
+    case CHECKBOX_ID_AUTO_RESET:
+        _TempConfig.bAutoReset = bState;
+        break;
+
+    case CHECKBOX_ID_AUTO_DISTRIBUTE:
+        _TempConfig.bAutoDistributePoints = bState;
         break;
 
     default:
@@ -939,6 +1189,22 @@ void CNewUIMuHelper::ApplyLootRangeUpdate(int iDelta)
     {
         _TempConfig.iObtainingRange = MAX_OBTAINING_RANGE;
     }
+}
+
+void CNewUIMuHelper::ApplyMinimumOptionUpdate(int iDelta)
+{
+    _TempConfig.iMinimumOptionLevel = std::clamp(_TempConfig.iMinimumOptionLevel + iDelta, 0, 16);
+}
+
+void CNewUIMuHelper::ApplyAutoPointPercentUpdate(int iPointIndex, int iDelta)
+{
+    if (iPointIndex < 0 || iPointIndex >= static_cast<int>(_TempConfig.aAutoPointPercent.size()))
+    {
+        return;
+    }
+
+    _TempConfig.aAutoPointPercent[iPointIndex] = static_cast<uint8_t>(
+        std::clamp<int>(_TempConfig.aAutoPointPercent[iPointIndex] + iDelta, 0, 100));
 }
 
 void CNewUIMuHelper::SaveExtraItem()
@@ -1032,7 +1298,20 @@ void CNewUIMuHelper::Reset()
     _TempConfig.bPickExcellent = false;
     _TempConfig.bPickAncient = false;
     _TempConfig.bPickExtraItems = false;
+    _TempConfig.bPickOnlyUsableItems = true;
+    _TempConfig.bPickCommonItems = false;
+    _TempConfig.bPickEventItems = false;
+    _TempConfig.bAutoConvertZenToAzoth = false;
+    _TempConfig.bAutoReset = false;
+    _TempConfig.bAutoDistributePoints = true;
+    _TempConfig.iMinimumOptionLevel = 0;
+    _TempConfig.aAutoPointPercent = { 25, 25, 20, 30, 0 };
     _TempConfig.aExtraItems.clear();
+    _TempConfig.bFallbackBasicAttack = true;
+
+    g_MuHelperHasLoadedConfig = true;
+    g_MuHelperLoadedCharacterName.clear();
+    ResolveMuHelperCharacterName(g_MuHelperLoadedCharacterName);
 
     ApplyConfig();
 }
@@ -1040,13 +1319,81 @@ void CNewUIMuHelper::Reset()
 void CNewUIMuHelper::LoadSavedConfig(const ConfigData& config)
 {
     _TempConfig = config;
-    ApplyConfig();
+    g_MuHelperHasLoadedConfig = true;
+    g_MuHelperLoadedCharacterName.clear();
+    ResolveMuHelperCharacterName(g_MuHelperLoadedCharacterName);
+    SaveLocalMuHelperConfig(_TempConfig);
+    ApplyConfig(true);
 }
 
-void CNewUIMuHelper::ApplyConfig()
+void CNewUIMuHelper::LoadCachedOrReset()
 {
+    std::wstring currentCharacterName;
+    const bool hasCurrentCharacterName = ResolveMuHelperCharacterName(currentCharacterName);
+    if (g_MuHelperHasLoadedConfig
+        && (!hasCurrentCharacterName
+            || g_MuHelperLoadedCharacterName.empty()
+            || g_MuHelperLoadedCharacterName == currentCharacterName))
+    {
+        ApplyConfig(true);
+        return;
+    }
+
+    ConfigData cachedConfig;
+    if (TryLoadLocalMuHelperConfig(cachedConfig))
+    {
+        _TempConfig = cachedConfig;
+        g_MuHelperHasLoadedConfig = true;
+        g_MuHelperLoadedCharacterName.clear();
+        ResolveMuHelperCharacterName(g_MuHelperLoadedCharacterName);
+        ApplyConfig(true);
+        return;
+    }
+
+    Reset();
+}
+
+bool CNewUIMuHelper::SetCheckBoxState(int iCheckboxId, bool bState)
+{
+    auto it = m_CheckBoxList.find(iCheckboxId);
+    if (it == m_CheckBoxList.end() || it->second.box == nullptr)
+    {
+        return false;
+    }
+
+    it->second.box->RegisterBoxState(bState);
+    return true;
+}
+
+bool CNewUIMuHelper::TryGetCheckBoxState(int iCheckboxId, bool& bState) const
+{
+    auto it = m_CheckBoxList.find(iCheckboxId);
+    if (it == m_CheckBoxList.end() || it->second.box == nullptr)
+    {
+        return false;
+    }
+
+    bState = it->second.box->GetBoxState();
+    return true;
+}
+
+void CNewUIMuHelper::ApplyConfig(bool bSyncUi)
+{
+    NormalizeConfigForUi(_TempConfig);
     g_MuHelper.Load(_TempConfig);
 
+    if (!bSyncUi)
+    {
+        g_MuHelperPendingConfigSync = true;
+        return;
+    }
+
+    SyncConfigToControls();
+    g_MuHelperPendingConfigSync = false;
+}
+
+void CNewUIMuHelper::SyncConfigToControls()
+{
     m_aiSelectedSkills[0] = _TempConfig.aiSkill[0] ? _TempConfig.aiSkill[0] : -1;
     m_aiSelectedSkills[1] = _TempConfig.aiSkill[1] ? _TempConfig.aiSkill[1] : -1;
     m_aiSelectedSkills[2] = _TempConfig.aiSkill[2] ? _TempConfig.aiSkill[2] : -1;
@@ -1054,58 +1401,111 @@ void CNewUIMuHelper::ApplyConfig()
     m_aiSelectedSkills[4] = _TempConfig.aiBuff[1] ? _TempConfig.aiBuff[1] : -1;
     m_aiSelectedSkills[5] = _TempConfig.aiBuff[2] ? _TempConfig.aiBuff[2] : -1;
 
-    m_CheckBoxList[CHECKBOX_ID_POTION].box->RegisterBoxState(_TempConfig.bUseHealPotion);
-    m_CheckBoxList[CHECKBOX_ID_AUTO_HEAL].box->RegisterBoxState(_TempConfig.bAutoHeal);
-    m_CheckBoxList[CHECKBOX_ID_DRAIN_LIFE].box->RegisterBoxState(_TempConfig.bUseDrainLife);
-    m_CheckBoxList[CHECKBOX_ID_LONG_DISTANCE].box->RegisterBoxState(_TempConfig.bLongRangeCounterAttack);
-    m_CheckBoxList[CHECKBOX_ID_ORIG_POSITION].box->RegisterBoxState(_TempConfig.bReturnToOriginalPosition);
+    SetCheckBoxState(CHECKBOX_ID_POTION, _TempConfig.bUseHealPotion);
+    SetCheckBoxState(CHECKBOX_ID_AUTO_HEAL, _TempConfig.bAutoHeal);
+    SetCheckBoxState(CHECKBOX_ID_DRAIN_LIFE, _TempConfig.bUseDrainLife);
+    SetCheckBoxState(CHECKBOX_ID_LONG_DISTANCE, _TempConfig.bLongRangeCounterAttack);
+    SetCheckBoxState(CHECKBOX_ID_ORIG_POSITION, _TempConfig.bReturnToOriginalPosition);
 
-    m_CheckBoxList[CHECKBOX_ID_SKILL2_DELAY].box->RegisterBoxState(_TempConfig.aiSkillCondition[1] & ON_TIMER);
-    m_CheckBoxList[CHECKBOX_ID_SKILL2_CONDITION].box->RegisterBoxState(_TempConfig.aiSkillCondition[1] & ON_CONDITION);
-    m_CheckBoxList[CHECKBOX_ID_SKILL3_DELAY].box->RegisterBoxState(_TempConfig.aiSkillCondition[2] & ON_TIMER);
-    m_CheckBoxList[CHECKBOX_ID_SKILL3_CONDITION].box->RegisterBoxState(_TempConfig.aiSkillCondition[2] & ON_CONDITION);
-    m_CheckBoxList[CHECKBOX_ID_COMBO].box->RegisterBoxState(_TempConfig.bUseCombo);
+    SetCheckBoxState(CHECKBOX_ID_SKILL2_DELAY, _TempConfig.aiSkillCondition[1] & ON_TIMER);
+    SetCheckBoxState(CHECKBOX_ID_SKILL2_CONDITION, _TempConfig.aiSkillCondition[1] & ON_CONDITION);
+    SetCheckBoxState(CHECKBOX_ID_SKILL3_DELAY, _TempConfig.aiSkillCondition[2] & ON_TIMER);
+    SetCheckBoxState(CHECKBOX_ID_SKILL3_CONDITION, _TempConfig.aiSkillCondition[2] & ON_CONDITION);
+    SetCheckBoxState(CHECKBOX_ID_COMBO, _TempConfig.bUseCombo);
 
-    wchar_t wsTempNum[MAX_NUMBER_DIGITS + 1];
-    memset(wsTempNum, 0, sizeof(wsTempNum));
-    std::swprintf(wsTempNum, MAX_NUMBER_DIGITS + 1, L"%d", _TempConfig.iMaxSecondsAway);
-    m_DistanceTimeInput.SetText(wsTempNum);
+    SetNumberInputText(m_DistanceTimeInput, _TempConfig.iMaxSecondsAway);
+    SetNumberInputText(m_Skill2DelayInput, _TempConfig.aiSkillInterval[1]);
+    SetNumberInputText(m_Skill3DelayInput, _TempConfig.aiSkillInterval[2]);
 
-    memset(wsTempNum, 0, sizeof(wsTempNum));
-    std::swprintf(wsTempNum, MAX_NUMBER_DIGITS + 1, L"%d", _TempConfig.aiSkillInterval[1]);
-    m_Skill2DelayInput.SetText(wsTempNum);
+    SetCheckBoxState(CHECKBOX_ID_BUFF_DURATION, _TempConfig.bBuffDuration);
+    SetCheckBoxState(CHECKBOX_ID_PARTY, _TempConfig.bSupportParty);
 
-    memset(wsTempNum, 0, sizeof(wsTempNum));
-    std::swprintf(wsTempNum, MAX_NUMBER_DIGITS + 1, L"%d", _TempConfig.aiSkillInterval[2]);
-    m_Skill3DelayInput.SetText(wsTempNum);
+    SetCheckBoxState(CHECKBOX_ID_USE_PET, _TempConfig.bUseDarkRaven);
+    SetCheckBoxState(CHECKBOX_ID_DR_ATTACK_CEASE, _TempConfig.iDarkRavenMode == PET_ATTACK_CEASE);
+    SetCheckBoxState(CHECKBOX_ID_DR_ATTACK_AUTO, _TempConfig.iDarkRavenMode == PET_ATTACK_AUTO);
+    SetCheckBoxState(CHECKBOX_ID_DR_ATTACK_TOGETHER, _TempConfig.iDarkRavenMode == PET_ATTACK_TOGETHER);
 
-    m_CheckBoxList[CHECKBOX_ID_BUFF_DURATION].box->RegisterBoxState(_TempConfig.bBuffDuration);
-    m_CheckBoxList[CHECKBOX_ID_PARTY].box->RegisterBoxState(_TempConfig.bSupportParty);
-
-    m_CheckBoxList[CHECKBOX_ID_USE_PET].box->RegisterBoxState(_TempConfig.bUseDarkRaven);
-    m_CheckBoxList[CHECKBOX_ID_DR_ATTACK_CEASE].box->RegisterBoxState(_TempConfig.iDarkRavenMode == PET_ATTACK_CEASE);
-    m_CheckBoxList[CHECKBOX_ID_DR_ATTACK_AUTO].box->RegisterBoxState(_TempConfig.iDarkRavenMode == PET_ATTACK_AUTO);
-    m_CheckBoxList[CHECKBOX_ID_DR_ATTACK_TOGETHER].box->RegisterBoxState(_TempConfig.iDarkRavenMode == PET_ATTACK_TOGETHER);
-
-    m_CheckBoxList[CHECKBOX_ID_REPAIR_ITEM].box->RegisterBoxState(_TempConfig.bRepairItem);
-    m_CheckBoxList[CHECKBOX_ID_PICK_ALL].box->RegisterBoxState(_TempConfig.bPickAllItems);
-    m_CheckBoxList[CHECKBOX_ID_PICK_SELECTED].box->RegisterBoxState(_TempConfig.bPickSelectItems);
-    m_CheckBoxList[CHECKBOX_ID_PICK_JEWEL].box->RegisterBoxState(_TempConfig.bPickJewel);
-    m_CheckBoxList[CHECKBOX_ID_PICK_ZEN].box->RegisterBoxState(_TempConfig.bPickZen);
-    m_CheckBoxList[CHECKBOX_ID_PICK_EXCELLENT].box->RegisterBoxState(_TempConfig.bPickExcellent);
-    m_CheckBoxList[CHECKBOX_ID_PICK_ANCIENT].box->RegisterBoxState(_TempConfig.bPickAncient);
-    m_CheckBoxList[CHECKBOX_ID_ADD_OTHER_ITEM].box->RegisterBoxState(_TempConfig.bPickExtraItems);
-
-    m_CheckBoxList[CHECKBOX_ID_AUTO_ACCEPT_FRIEND].box->RegisterBoxState(_TempConfig.bAutoAcceptFriend);
-    m_CheckBoxList[CHECKBOX_ID_AUTO_ACCEPT_GUILD].box->RegisterBoxState(_TempConfig.bAutoAcceptGuild);
-    m_CheckBoxList[CHECKBOX_ID_AUTO_DEFEND].box->RegisterBoxState(_TempConfig.bUseSelfDefense);
-    m_CheckBoxList[CHECKBOX_ID_FALLBACK_BASIC_ATTACK].box->RegisterBoxState(_TempConfig.bFallbackBasicAttack);
+    SetCheckBoxState(CHECKBOX_ID_REPAIR_ITEM, _TempConfig.bRepairItem);
+    SetCheckBoxState(CHECKBOX_ID_PICK_ALL, _TempConfig.bPickAllItems);
+    SetCheckBoxState(CHECKBOX_ID_PICK_SELECTED, _TempConfig.bPickSelectItems);
+    SetCheckBoxState(CHECKBOX_ID_PICK_USABLE_ONLY, _TempConfig.bPickOnlyUsableItems);
+    SetCheckBoxState(CHECKBOX_ID_PICK_COMMON, _TempConfig.bPickCommonItems);
+    SetCheckBoxState(CHECKBOX_ID_PICK_EVENT, _TempConfig.bPickEventItems);
+    SetCheckBoxState(CHECKBOX_ID_PICK_JEWEL, _TempConfig.bPickJewel);
+    SetCheckBoxState(CHECKBOX_ID_PICK_ZEN, _TempConfig.bPickZen);
+    SetCheckBoxState(CHECKBOX_ID_PICK_EXCELLENT, _TempConfig.bPickExcellent);
+    SetCheckBoxState(CHECKBOX_ID_PICK_ANCIENT, _TempConfig.bPickAncient);
+    SetCheckBoxState(CHECKBOX_ID_ADD_OTHER_ITEM, _TempConfig.bPickExtraItems);
+    SetCheckBoxState(CHECKBOX_ID_AUTO_AZOTH, _TempConfig.bAutoConvertZenToAzoth);
+    SetCheckBoxState(CHECKBOX_ID_AUTO_ACCEPT_FRIEND, _TempConfig.bAutoAcceptFriend);
+    SetCheckBoxState(CHECKBOX_ID_AUTO_ACCEPT_GUILD, _TempConfig.bAutoAcceptGuild);
+    SetCheckBoxState(CHECKBOX_ID_AUTO_DEFEND, _TempConfig.bUseSelfDefense);
+    SetCheckBoxState(CHECKBOX_ID_FALLBACK_BASIC_ATTACK, _TempConfig.bFallbackBasicAttack);
+    SetCheckBoxState(CHECKBOX_ID_AUTO_RESET, _TempConfig.bAutoReset);
+    SetCheckBoxState(CHECKBOX_ID_AUTO_DISTRIBUTE, _TempConfig.bAutoDistributePoints);
 
     m_ItemFilter.Clear();
     for (const auto& item : _TempConfig.aExtraItems)
     {
         m_ItemFilter.AddText(item.c_str());
     }
+
+    if (g_pNewUIMuHelperExt)
+    {
+        g_pNewUIMuHelperExt->ApplySavedConfig();
+    }
+}
+
+void CNewUIMuHelper::SyncConfigFromControls()
+{
+    bool state = false;
+
+    if (TryGetCheckBoxState(CHECKBOX_ID_POTION, state)) _TempConfig.bUseHealPotion = state;
+    if (TryGetCheckBoxState(CHECKBOX_ID_AUTO_HEAL, state)) _TempConfig.bAutoHeal = state;
+    if (TryGetCheckBoxState(CHECKBOX_ID_DRAIN_LIFE, state)) _TempConfig.bUseDrainLife = state;
+    if (TryGetCheckBoxState(CHECKBOX_ID_LONG_DISTANCE, state)) _TempConfig.bLongRangeCounterAttack = state;
+    if (TryGetCheckBoxState(CHECKBOX_ID_ORIG_POSITION, state)) _TempConfig.bReturnToOriginalPosition = state;
+    if (TryGetCheckBoxState(CHECKBOX_ID_COMBO, state)) _TempConfig.bUseCombo = state;
+    if (TryGetCheckBoxState(CHECKBOX_ID_BUFF_DURATION, state)) _TempConfig.bBuffDuration = state;
+    if (TryGetCheckBoxState(CHECKBOX_ID_PARTY, state)) _TempConfig.bSupportParty = state;
+    if (TryGetCheckBoxState(CHECKBOX_ID_USE_PET, state)) _TempConfig.bUseDarkRaven = state;
+    if (TryGetCheckBoxState(CHECKBOX_ID_REPAIR_ITEM, state)) _TempConfig.bRepairItem = state;
+    if (TryGetCheckBoxState(CHECKBOX_ID_PICK_USABLE_ONLY, state)) _TempConfig.bPickOnlyUsableItems = state;
+    if (TryGetCheckBoxState(CHECKBOX_ID_PICK_COMMON, state)) _TempConfig.bPickCommonItems = state;
+    if (TryGetCheckBoxState(CHECKBOX_ID_PICK_EVENT, state)) _TempConfig.bPickEventItems = state;
+    if (TryGetCheckBoxState(CHECKBOX_ID_PICK_JEWEL, state)) _TempConfig.bPickJewel = state;
+    if (TryGetCheckBoxState(CHECKBOX_ID_PICK_ZEN, state)) _TempConfig.bPickZen = state;
+    if (TryGetCheckBoxState(CHECKBOX_ID_PICK_EXCELLENT, state)) _TempConfig.bPickExcellent = state;
+    if (TryGetCheckBoxState(CHECKBOX_ID_PICK_ANCIENT, state)) _TempConfig.bPickAncient = state;
+    if (TryGetCheckBoxState(CHECKBOX_ID_ADD_OTHER_ITEM, state)) _TempConfig.bPickExtraItems = state;
+    if (TryGetCheckBoxState(CHECKBOX_ID_AUTO_AZOTH, state)) _TempConfig.bAutoConvertZenToAzoth = state;
+    if (TryGetCheckBoxState(CHECKBOX_ID_AUTO_ACCEPT_FRIEND, state)) _TempConfig.bAutoAcceptFriend = state;
+    if (TryGetCheckBoxState(CHECKBOX_ID_AUTO_ACCEPT_GUILD, state)) _TempConfig.bAutoAcceptGuild = state;
+    if (TryGetCheckBoxState(CHECKBOX_ID_AUTO_DEFEND, state)) _TempConfig.bUseSelfDefense = state;
+    if (TryGetCheckBoxState(CHECKBOX_ID_FALLBACK_BASIC_ATTACK, state)) _TempConfig.bFallbackBasicAttack = state;
+    if (TryGetCheckBoxState(CHECKBOX_ID_AUTO_RESET, state)) _TempConfig.bAutoReset = state;
+
+    _TempConfig.aiSkillCondition[1] &= ~(ON_TIMER | ON_CONDITION);
+    if (TryGetCheckBoxState(CHECKBOX_ID_SKILL2_DELAY, state) && state) _TempConfig.aiSkillCondition[1] |= ON_TIMER;
+    if (TryGetCheckBoxState(CHECKBOX_ID_SKILL2_CONDITION, state) && state) _TempConfig.aiSkillCondition[1] |= ON_CONDITION;
+
+    _TempConfig.aiSkillCondition[2] &= ~(ON_TIMER | ON_CONDITION);
+    if (TryGetCheckBoxState(CHECKBOX_ID_SKILL3_DELAY, state) && state) _TempConfig.aiSkillCondition[2] |= ON_TIMER;
+    if (TryGetCheckBoxState(CHECKBOX_ID_SKILL3_CONDITION, state) && state) _TempConfig.aiSkillCondition[2] |= ON_CONDITION;
+
+    if (TryGetCheckBoxState(CHECKBOX_ID_DR_ATTACK_CEASE, state) && state)
+    {
+        _TempConfig.iDarkRavenMode = PET_ATTACK_CEASE;
+    }
+    else if (TryGetCheckBoxState(CHECKBOX_ID_DR_ATTACK_AUTO, state) && state)
+    {
+        _TempConfig.iDarkRavenMode = PET_ATTACK_AUTO;
+    }
+    else if (TryGetCheckBoxState(CHECKBOX_ID_DR_ATTACK_TOGETHER, state) && state)
+    {
+        _TempConfig.iDarkRavenMode = PET_ATTACK_TOGETHER;
+    }
+
 }
 
 void CNewUIMuHelper::InitConfig()
@@ -1118,6 +1518,8 @@ void CNewUIMuHelper::InitConfig()
 void CNewUIMuHelper::SaveConfig()
 {
     wchar_t wsNumberInput[MAX_NUMBER_DIGITS + 1]{};
+
+    SyncConfigFromControls();
 
     m_DistanceTimeInput.GetText(wsNumberInput, std::size(wsNumberInput));
     _TempConfig.iMaxSecondsAway = GetIntFromTextInput(wsNumberInput);
@@ -1134,8 +1536,17 @@ void CNewUIMuHelper::SaveConfig()
     _TempConfig.aiBuff[0] = m_aiSelectedSkills[3] > 0 ? m_aiSelectedSkills[3] : 0;
     _TempConfig.aiBuff[1] = m_aiSelectedSkills[4] > 0 ? m_aiSelectedSkills[4] : 0;
     _TempConfig.aiBuff[2] = m_aiSelectedSkills[5] > 0 ? m_aiSelectedSkills[5] : 0;
+    _TempConfig.bPickAllItems = _TempConfig.bPickCommonItems;
+    _TempConfig.bPickSelectItems = _TempConfig.bPickCommonItems
+        || _TempConfig.bPickExcellent
+        || _TempConfig.bPickAncient
+        || _TempConfig.bPickJewel
+        || _TempConfig.bPickEventItems
+        || _TempConfig.bPickExtraItems;
+    _TempConfig.bAutoDistributePoints = true;
 
     g_MuHelper.Save(_TempConfig);
+    SaveLocalMuHelperConfig(_TempConfig);
 }
 
 float CNewUIMuHelper::GetLayerDepth()
@@ -1151,6 +1562,11 @@ float CNewUIMuHelper::GetKeyEventOrder()
 void CNewUIMuHelper::Show(bool bShow)
 {
     CNewUIObj::Show(bShow);
+
+    if (bShow && g_MuHelperPendingConfigSync)
+    {
+        ApplyConfig(true);
+    }
 
     if (bShow == false)
     {
@@ -1186,17 +1602,6 @@ bool CNewUIMuHelper::Render()
 
     g_pRenderText->RenderText(m_Pos.x, m_Pos.y + 13, I18N::Game::OfficialMUHelper, 190, 0, RT3_SORT_CENTER);
 
-    if (m_iCurrentOpenTab != 0)
-    {
-        RenderBack(m_Pos.x + 12, m_Pos.y + 340, 165, 46);
-
-        g_pRenderText->SetFont(g_hFont);
-        g_pRenderText->RenderText(m_Pos.x + 20, m_Pos.y + 347, I18N::Game::UsedExtensionFunction, 0, 0, RT3_SORT_CENTER);
-
-        g_pRenderText->SetTextColor(0xFF00B4FF);
-        g_pRenderText->RenderText(m_Pos.x + 20, m_Pos.y + 365, I18N::Game::NoExtensionFunctionBeingUsed, 0, 0, RT3_SORT_CENTER);
-    }
-
     g_pRenderText->SetTextColor(TextColor);
 
     m_TabBtn.Render();
@@ -1205,9 +1610,9 @@ bool CNewUIMuHelper::Render()
     {
         RenderBack(m_Pos.x + 12, m_Pos.y + 73, 68, 50);
         RenderBack(m_Pos.x + 75, m_Pos.y + 73, 102, 50);
-        RenderBack(m_Pos.x + 12, m_Pos.y + 120, 165, 30);
-        RenderBack(m_Pos.x + 12, m_Pos.y + 147, 165, 195);
-        RenderBack(m_Pos.x + 16, m_Pos.y + 235, 158, 75);
+        RenderBack(m_Pos.x + 12, m_Pos.y + 120, 165, 92);
+        RenderBack(m_Pos.x + 12, m_Pos.y + 210, 165, 122);
+        RenderBack(m_Pos.x + 12, m_Pos.y + 334, 165, 28);
 
         RenderImage(BITMAP_DISTANCE_BEGIN + _TempConfig.iObtainingRange, m_Pos.x + 29, m_Pos.y + 92, 15, 19, 0.f, 0.f, 15.f / 16.f, 19.f / 32.f);
 
@@ -1215,8 +1620,10 @@ bool CNewUIMuHelper::Render()
     }
     else if (m_iCurrentOpenTab == 2)
     {
-        RenderBack(m_Pos.x + 12, m_Pos.y + 73, 165, 50);
-        RenderBack(m_Pos.x + 12, m_Pos.y + 120, 165, 222);
+        RenderBack(m_Pos.x + 12, m_Pos.y + 73, 165, 46);
+        RenderBack(m_Pos.x + 12, m_Pos.y + 120, 165, 46);
+        RenderBack(m_Pos.x + 12, m_Pos.y + 170, 165, 126);
+        RenderBack(m_Pos.x + 12, m_Pos.y + 298, 165, 50);
     }
     else
     {
@@ -1233,6 +1640,38 @@ bool CNewUIMuHelper::Render()
     RenderIconList();
     RenderTextList();
     RenderBtnList();
+
+    g_pRenderText->SetFont(g_hFont);
+    g_pRenderText->SetBgColor(0);
+    if (m_iCurrentOpenTab == 1)
+    {
+        wchar_t minOptionText[32] = {};
+        swprintf_s(minOptionText, L"%d", _TempConfig.iMinimumOptionLevel);
+        g_pRenderText->SetTextColor(230, 210, 130, 255);
+        g_pRenderText->RenderText(m_Pos.x + 20, m_Pos.y + 344, L"Numero de opcoes", 110, 0, RT3_SORT_LEFT);
+        g_pRenderText->SetTextColor(255, 255, 255, 255);
+        g_pRenderText->RenderText(m_Pos.x + 103, m_Pos.y + 344, minOptionText, 24, 0, RT3_SORT_CENTER);
+    }
+    else if (m_iCurrentOpenTab == 2)
+    {
+        g_pRenderText->SetTextColor(230, 210, 130, 255);
+        g_pRenderText->RenderText(m_Pos.x + 20, m_Pos.y + 176, L"Distribuicao automatica", 150, 0, RT3_SORT_LEFT);
+
+        static const wchar_t* kStatNames[5] = { L"Forca", L"Agilidade", L"Vitalidade", L"Energia", L"Comando" };
+        for (int index = 0; index < 5; ++index)
+        {
+            const int rowY = m_Pos.y + 188 + (index * 22);
+            wchar_t percentText[16] = {};
+            swprintf_s(percentText, L"%d%%", static_cast<int>(_TempConfig.aAutoPointPercent[index]));
+            g_pRenderText->SetTextColor(index == 4 && gCharacterManager.GetBaseClass(Hero->Class) != CLASS_DARK_LORD ? RGBA(120, 120, 120, 255) : RGBA(235, 235, 235, 255));
+            g_pRenderText->RenderText(m_Pos.x + 22, rowY, kStatNames[index], 86, 0, RT3_SORT_LEFT);
+            g_pRenderText->RenderText(m_Pos.x + 98, rowY, percentText, 32, 0, RT3_SORT_RIGHT);
+        }
+
+        g_pRenderText->SetTextColor(200, 190, 150, 255);
+        g_pRenderText->RenderText(m_Pos.x + 20, m_Pos.y + 304, L"32767: pula atributo cheio", 150, 0, RT3_SORT_LEFT);
+        g_pRenderText->RenderText(m_Pos.x + 20, m_Pos.y + 322, L"Salvar aplica ao helper/offline", 150, 0, RT3_SORT_LEFT);
+    }
 
     if (m_iCurrentOpenTab == 0)
     {
@@ -1427,6 +1866,10 @@ void CNewUIMuHelper::RenderBoxList()
     for (; li != m_CheckBoxList.end(); li++)
     {
         CheckBoxTap* cBOX = &li->second;
+        if (cBOX->box == nullptr)
+        {
+            continue;
+        }
 
         if ((cBOX->class_character[gCharacterManager.GetBaseClass(Hero->Class)]) && (cBOX->iNumTab == m_iCurrentOpenTab || cBOX->iNumTab == -1))
         {
@@ -1442,6 +1885,10 @@ int CNewUIMuHelper::UpdateMouseBoxList()
     for (; li != m_CheckBoxList.end(); li++)
     {
         CheckBoxTap* cBOX = &li->second;
+        if (cBOX->box == nullptr)
+        {
+            continue;
+        }
 
         if ((cBOX->class_character[gCharacterManager.GetBaseClass(Hero->Class)]) && (cBOX->iNumTab == m_iCurrentOpenTab || cBOX->iNumTab == -1))
         {
@@ -2934,9 +3381,7 @@ void CNewUIMuHelperExt::Toggle(int iPageId)
         m_BtnPartyDuration.RegisterBoxState(_TempConfig.bBuffDurationParty);
         m_iCurrentPartyHealThreshold = _TempConfig.iHealPartyThreshold / 10;
 
-        wchar_t wsBuffTime[MAX_NUMBER_DIGITS + 1] = { 0 };
-        std::swprintf(wsBuffTime, MAX_NUMBER_DIGITS + 1, L"%d", _TempConfig.iBuffCastInterval);
-        m_BuffTimeInput.SetText(wsBuffTime);
+        SetNumberInputText(m_BuffTimeInput, _TempConfig.iBuffCastInterval);
         m_BuffTimeInput.SetPosition(m_Pos.x + 127, m_Pos.y + 97);
     }
     else if (m_iCurrentPage == SUB_PAGE_PARTY_CONFIG_ELF)
@@ -2947,9 +3392,7 @@ void CNewUIMuHelperExt::Toggle(int iPageId)
         m_BtnPartyDuration.RegisterBoxState(_TempConfig.bBuffDurationParty);
         m_iCurrentPartyHealThreshold = _TempConfig.iHealPartyThreshold / 10;
 
-        wchar_t wsBuffTime[MAX_NUMBER_DIGITS + 1] = { 0 };
-        std::swprintf(wsBuffTime, MAX_NUMBER_DIGITS + 1, L"%d", _TempConfig.iBuffCastInterval);
-        m_BuffTimeInput.SetText(wsBuffTime);
+        SetNumberInputText(m_BuffTimeInput, _TempConfig.iBuffCastInterval);
         m_BuffTimeInput.SetPosition(m_Pos.x + 127, m_Pos.y + 187);
     }
 

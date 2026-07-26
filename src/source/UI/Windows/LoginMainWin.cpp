@@ -69,28 +69,20 @@ void CLoginMainWin::SetPosition(int nXCoord, int nYCoord)
     );
 }
 
-void CLoginMainWin::Show(bool bShow)
+void CLoginMainWin::Show(bool)
 {
-    CWin::Show(bShow);
+    // Keep the Season 21 login scene clear of the legacy menu/credit chrome.
+    CWin::Show(false);
 
     for (int i = 0; i < LMW_BTN_MAX; ++i)
-        m_aBtn[i].Show(bShow);
+        m_aBtn[i].Show(false);
 
-    m_sprDeco.Show(bShow);
+    m_sprDeco.Show(false);
 }
 
-bool CLoginMainWin::CursorInWin(int nArea)
+bool CLoginMainWin::CursorInWin(int)
 {
-    if (!CWin::m_bShow)
-        return false;
-
-    switch (nArea)
-    {
-    case WA_MOVE:
-        return false;
-    }
-
-    return CWin::CursorInWin(nArea);
+    return false;
 }
 
 void CLoginMainWin::UpdateWhileActive(double dDeltaTick)

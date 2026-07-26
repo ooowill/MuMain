@@ -43,11 +43,11 @@ constexpr float RENDER_DISTANCE_MULTIPLIER = 1.4f;
  */
 namespace CharacterSceneCamera
 {
-    constexpr float POSITION_X = 9758.93f;
-    constexpr float POSITION_Y = 18913.11f;
-    constexpr float POSITION_Z = 675.5f;
+    constexpr float POSITION_X = 15215.088867f;
+    constexpr float POSITION_Y = 12186.536133f;
+    constexpr float POSITION_Z = 529.371704f;
     constexpr float ANGLE_PITCH = -84.5f;  // Angle[0]
-    constexpr float ANGLE_ROLL  = -75.0f;  // Angle[2]
+    constexpr float ANGLE_ROLL  = -80.0f;  // Angle[2]
 }
 
 /**

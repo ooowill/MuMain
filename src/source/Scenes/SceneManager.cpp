@@ -4,6 +4,9 @@
 
 #include "stdafx.h"
 #include "Core/Input/KeyState.h"
+#include <array>
+#include <cmath>
+#include <cwchar>
 #include <vector>
 #include <algorithm>
 #include <numeric>
@@ -27,6 +30,7 @@ FrameTimingState g_frameTiming;
 #include "CharacterScene.h"
 #include "MainScene.h"
 #include "LoadingScene.h"
+#include "Audio/AudioPlayer.h"
 #include "Audio/DSPlaySound.h"
 #include "Render/Textures/ZzzOpenglUtil.h"
 #include "Engine/Physics/PhysicsManager.h"
@@ -35,11 +39,13 @@ FrameTimingState g_frameTiming;
 #include "UI/Legacy/UIMng.h"
 #include "Network/Server/WSclient.h"
 #include "Network/Reconnect/ReconnectManager.h"
+#include "Engine/Object/ZzzCharacter.h"
 #include "UI/NewUI/Dialogs/ReconnectDialog.h"
 #include "GameLogic/Events/w_CursedTemple.h"
 #include "Network/Server/ServerListManager.h"
 #include "UI/NewUI/NewUISystem.h"
 #include "Engine/Object/ZzzInterface.h"
+#include "Engine/Object/ZzzOpenData.h"
 #include "UI/NewUI/HUD/Notices.h"
 #include "I18N/All.h"
 #include "Engine/AI/ZzzAI.h"
@@ -67,6 +73,193 @@ extern int HeroTile;
 extern bool Destroy;
 extern double WorldTime;
 extern float FPS_ANIMATION_FACTOR;
+
+namespace
+{
+    constexpr float kLorenciaBarCenterX = 121.5f;
+    constexpr float kLorenciaBarCenterY = 132.f;
+    constexpr float kLorenciaBarEchoRadius = 10.f;
+    constexpr float kLorenciaBarEchoMinGain = 0.22f;
+    constexpr float kLorenciaBarEchoMaxGain = 0.75f;
+    constexpr float kLorenciaBarMainMinNearGain = 0.12f;
+    constexpr int kLorenciaBandKeyBase = MAX_CHARACTERS_CLIENT - 40;
+    constexpr int kLegacyLorenciaBandKeyBase = -17504;
+
+    struct LorenciaBandMember
+    {
+        int Model;
+        unsigned char X;
+        unsigned char Y;
+        float Rotation;
+        const wchar_t* Name;
+    };
+
+    constexpr std::array<LorenciaBandMember, 0> kLorenciaBandMembers = {};
+
+    constexpr std::array<const wchar_t*, 7> kLegacyLorenciaBandNames = { {
+        L"Bardo de Lorencia",
+        L"Ritmo da Taverna",
+        L"Bardo do Norte",
+        L"Harpista",
+        L"Percussao",
+        L"Tecladista",
+        L"Vocalista",
+    } };
+
+    bool g_lorenciaBandSpawned = false;
+
+    bool IsPvpServerSelectedForLorenciaBar()
+    {
+        return g_ServerListManager != nullptr && g_ServerListManager->IsSelectedPvpServer();
+    }
+
+    bool IsLorenciaBandName(const wchar_t* name)
+    {
+        for (const auto& member : kLorenciaBandMembers)
+        {
+            if (std::wcscmp(name, member.Name) == 0)
+                return true;
+        }
+
+        for (const auto legacyName : kLegacyLorenciaBandNames)
+        {
+            if (std::wcscmp(name, legacyName) == 0)
+                return true;
+        }
+        return false;
+    }
+
+    bool IsLorenciaBandKey(int key)
+    {
+        if (key >= kLorenciaBandKeyBase && key < kLorenciaBandKeyBase + static_cast<int>(kLorenciaBandMembers.size()))
+            return true;
+
+        return key >= kLegacyLorenciaBandKeyBase && key < kLegacyLorenciaBandKeyBase + 4;
+    }
+
+    bool IsLorenciaBandCharacter(const CHARACTER* character)
+    {
+        if (character == nullptr || !character->Object.Live)
+            return false;
+
+        return IsLorenciaBandKey(character->Key) || IsLorenciaBandName(character->ID);
+    }
+
+    bool IsLorenciaBandAlive()
+    {
+        for (int i = 0; i < static_cast<int>(kLorenciaBandMembers.size()); ++i)
+        {
+            if (FindCharacterIndex(kLorenciaBandKeyBase + i) == MAX_CHARACTERS_CLIENT)
+                return false;
+        }
+        return true;
+    }
+
+    float SmoothStep(float value)
+    {
+        value = std::clamp(value, 0.f, 1.f);
+        return value * value * (3.f - (2.f * value));
+    }
+
+    float GetLorenciaBarPresence()
+    {
+        if (gMapManager.WorldActive != WD_0LORENCIA || Hero == nullptr)
+            return 0.f;
+
+        const float heroX = Hero->Object.Position[0] > 0.f
+            ? Hero->Object.Position[0] / TERRAIN_SCALE
+            : static_cast<float>(Hero->PositionX);
+        const float heroY = Hero->Object.Position[1] > 0.f
+            ? Hero->Object.Position[1] / TERRAIN_SCALE
+            : static_cast<float>(Hero->PositionY);
+        const float dx = heroX - kLorenciaBarCenterX;
+        const float dy = heroY - kLorenciaBarCenterY;
+        const float distance = std::sqrt((dx * dx) + (dy * dy));
+        return SmoothStep(1.f - (distance / kLorenciaBarEchoRadius));
+    }
+
+    void DeleteLorenciaBarBand()
+    {
+        for (int i = 0; i < MAX_CHARACTERS_CLIENT; ++i)
+        {
+            CHARACTER* character = &CharactersClient[i];
+            if (IsLorenciaBandCharacter(character))
+                DeleteCharacter(character, &character->Object);
+        }
+        g_lorenciaBandSpawned = false;
+    }
+
+    void EnsureLorenciaBarBand()
+    {
+        if (IsPvpServerSelectedForLorenciaBar())
+        {
+            DeleteLorenciaBarBand();
+            return;
+        }
+
+        if (gMapManager.WorldActive != WD_0LORENCIA || SceneFlag != MAIN_SCENE)
+        {
+            if (g_lorenciaBandSpawned)
+                DeleteLorenciaBarBand();
+            return;
+        }
+
+        if (g_lorenciaBandSpawned && IsLorenciaBandAlive())
+            return;
+
+        DeleteLorenciaBarBand();
+
+        int createdCount = 0;
+        for (int i = 0; i < static_cast<int>(kLorenciaBandMembers.size()); ++i)
+        {
+            const auto& member = kLorenciaBandMembers[i];
+            OpenNpc(member.Model);
+
+            CHARACTER* character = CreateCharacter(kLorenciaBandKeyBase + i, member.Model, member.X, member.Y, member.Rotation);
+            if (character == nullptr || character == &CharactersClient[MAX_CHARACTERS_CLIENT])
+                continue;
+
+            character->Object.Kind = KIND_NPC;
+            character->Object.Scale = 0.95f;
+            wcscpy(character->ID, member.Name);
+            ++createdCount;
+        }
+
+        g_lorenciaBandSpawned = createdCount == static_cast<int>(kLorenciaBandMembers.size());
+    }
+
+    void UpdateLorenciaBarAudio()
+    {
+        if (IsPvpServerSelectedForLorenciaBar() || gMapManager.WorldActive != WD_0LORENCIA || SceneFlag != MAIN_SCENE)
+        {
+            AudioPlayer::SetMainMusicFade(1.f);
+            AudioPlayer::StopAmbient(MUSIC_PUB);
+            return;
+        }
+
+        const bool isInsideBar = Hero != nullptr && HeroTile == 4;
+        const float barPresence = GetLorenciaBarPresence();
+        const float barGain = isInsideBar
+            ? 1.f
+            : (barPresence > 0.f
+                ? (kLorenciaBarEchoMinGain + ((kLorenciaBarEchoMaxGain - kLorenciaBarEchoMinGain) * barPresence))
+                : 0.f);
+        const float lorenciaGain = isInsideBar
+            ? 0.f
+            : (1.f - ((1.f - kLorenciaBarMainMinNearGain) * barPresence));
+
+        AudioPlayer::SetMainMusicFade(lorenciaGain);
+        if (barGain > 0.f)
+        {
+            AudioPlayer::PlayAmbientLoop(MUSIC_PUB, barGain);
+            AudioPlayer::SetAmbientGain(barGain);
+        }
+        else
+        {
+            AudioPlayer::StopAmbient(MUSIC_PUB);
+        }
+    }
+}
 
 static bool g_bShowDebugInfo =
 #ifdef _DEBUG
@@ -617,6 +810,13 @@ static void RenderFpsCounter()
  */
 static void CheckServerConnection()
 {
+#ifdef _EDITOR
+    if (wcsstr(GetCommandLineW(), L"--character-map-editor") != nullptr)
+    {
+        return;
+    }
+#endif
+
     if (SocketClient != nullptr && SocketClient->IsConnected())
     {
         return;
@@ -809,18 +1009,16 @@ static void ManageBackgroundMusic()
 {
     if (gMapManager.WorldActive == WD_0LORENCIA)
     {
-        if (Hero->SafeZone)
-        {
-            if (HeroTile == 4)
-                PlayMp3(MUSIC_PUB);
-            else
-                PlayMp3(MUSIC_MAIN_THEME);
-        }
+        PlayMp3(MUSIC_MAIN_THEME);
+        EnsureLorenciaBarBand();
+        UpdateLorenciaBarAudio();
     }
     else
     {
         StopMp3(MUSIC_PUB);
         StopMp3(MUSIC_MAIN_THEME);
+        EnsureLorenciaBarBand();
+        UpdateLorenciaBarAudio();
     }
 
     if (gMapManager.WorldActive == WD_2DEVIAS)
@@ -969,7 +1167,11 @@ static void ManageBackgroundMusic()
 static void ManageMainSceneAudio()
 {
     if (SceneFlag != MAIN_SCENE)
+    {
+        EnsureLorenciaBarBand();
+        UpdateLorenciaBarAudio();
         return;
+    }
 
     PlayWorldAmbientSounds();
     StopInactiveAmbientSounds();

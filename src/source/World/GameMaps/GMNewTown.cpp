@@ -23,6 +23,7 @@
 
 #include "World/MapInfra/w_BaseMap.h"
 #include "World/MapInfra/w_MapHeaders.h"
+#include "World/GameMaps/LoginSceneEnvironment.h"
 
 using namespace SEASON3B;
 
@@ -52,19 +53,7 @@ void GMNewTown::CreateObject(OBJECT* pObject)
         return;
     if (IsNewMap73_74())
     {
-        if (g_EmpireGuardian4.CreateObject(pObject))
-        {
-            switch (pObject->Type)
-            {
-            case 129:	case 79:	case 83:
-            case 82:	case 85:	case 86:
-            case 130:	case 131:	case 158:
-                pObject->HiddenMesh = -2;
-                return;
-            default:
-                break;
-            }
-        }
+        LoginSceneEnvironment::CreateObject(pObject);
         return;
     }
 
@@ -90,7 +79,7 @@ bool GMNewTown::MoveObject(OBJECT* pObject)
         return false;
 
     if (IsNewMap73_74())
-        return g_EmpireGuardian4.MoveObject(pObject);
+        return LoginSceneEnvironment::MoveObject(pObject);
 
     if (gMapManager.WorldActive == WD_51HOME_6TH_CHAR)
         PlayObjectSound(pObject);
@@ -237,10 +226,7 @@ bool GMNewTown::RenderObjectVisual(OBJECT* pObject, BMD* pModel)
         return false;
 
     if (IsNewMap73_74())
-    {
-        g_EmpireGuardian4.RenderObjectVisual(pObject, pModel);
-        return true;
-    }
+        return LoginSceneEnvironment::RenderObjectVisual(pObject, pModel);
 
     vec3_t p, Position, Light;
 
@@ -728,7 +714,7 @@ bool GMNewTown::RenderObject(OBJECT* pObject, BMD* pModel, bool ExtraMon)
         return false;
 
     if (IsNewMap73_74())
-        return g_EmpireGuardian4.RenderObjectMesh(pObject, pModel, ExtraMon);
+        return LoginSceneEnvironment::RenderObject(pObject, pModel);
 
     // ���
     if ((pObject->Type >= 5 && pObject->Type <= 14) || pObject->Type == 4 || pObject->Type == 129)
@@ -813,7 +799,6 @@ void GMNewTown::RenderObjectAfterCharacter(OBJECT* pObject, BMD* pModel, bool Ex
 
     if (IsNewMap73_74())
     {
-        g_EmpireGuardian4.RenderAfterObjectMesh(pObject, pModel, ExtraMon0);
         return;
     }
 

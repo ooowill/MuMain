@@ -17,8 +17,44 @@
 #include "Network/Server/WSclient.h"
 #include "Core/Utilities/Log/ErrorReport.h"
 #include "Core/Utilities/Log/muConsoleDebug.h"
+#include "Render/Textures/ZzzOpenglUtil.h"
 
-#define	SMW_BTN_GAP		4
+namespace
+{
+    constexpr int kPanelWidth = 306;
+    constexpr int kPanelHeight = 286;
+    constexpr int kButtonWidth = 108;
+    constexpr int kButtonHeight = 30;
+    constexpr int kButtonGap = 20;
+    constexpr int kFirstButtonY = 67;
+    constexpr int kCloseButtonY = 238;
+
+    int LogicalX(int value)
+    {
+        const float rate = g_fScreenRate_x > 0.0f ? g_fScreenRate_x : 1.0f;
+        return static_cast<int>(value / rate);
+    }
+
+    int LogicalY(int value)
+    {
+        const float rate = g_fScreenRate_y > 0.0f ? g_fScreenRate_y : 1.0f;
+        return static_cast<int>(value / rate);
+    }
+
+    void FillRect(int x, int y, int width, int height, BYTE red, BYTE green, BYTE blue, BYTE alpha)
+    {
+        const float rateX = g_fScreenRate_x > 0.0f ? g_fScreenRate_x : 1.0f;
+        const float rateY = g_fScreenRate_y > 0.0f ? g_fScreenRate_y : 1.0f;
+        ::glColor4ub(red, green, blue, alpha);
+        ::RenderColor(
+            static_cast<float>(x) / rateX,
+            static_cast<float>(y) / rateY,
+            static_cast<float>(width) / rateX,
+            static_cast<float>(height) / rateY,
+            0.0f,
+            0);
+    }
+}
 
 extern EGameScene  SceneFlag;
 extern bool LogOut;
@@ -34,17 +70,8 @@ CSysMenuWin::~CSysMenuWin()
 void CSysMenuWin::Create()
 {
     CInput rInput = CInput::Instance();
-    CWin::Create(rInput.GetScreenWidth(), rInput.GetScreenHeight());
-
-    SImgInfo aiiBack[WE_BG_MAX] =
-    {
-        { BITMAP_SYS_WIN, 0, 0, 128, 128 },
-        { BITMAP_SYS_WIN + 1, 0, 0, 213, 64 },
-        { BITMAP_SYS_WIN + 2, 0, 0, 213, 43 },
-        { BITMAP_SYS_WIN + 3, 0, 0, 5, 8 },
-        { BITMAP_SYS_WIN + 4, 0, 0, 5, 8 }
-    };
-    m_winBack.Create(aiiBack, 1, 10);
+    CWin::Create(rInput.GetScreenWidth(), rInput.GetScreenHeight(), -2);
+    m_winBack.Create(kPanelWidth, kPanelHeight, -2);
 
     const wchar_t* apszBtnText[SMW_BTN_MAX] =
     { I18N::Game::ExitGame, I18N::Game::SelectServer, I18N::Game::Option385, I18N::Game::Close388 };
@@ -52,7 +79,7 @@ void CSysMenuWin::Create()
     { CLRDW_BR_GRAY, CLRDW_BR_GRAY, CLRDW_WHITE, 0 };
     for (int i = 0; i < SMW_BTN_MAX; ++i)
     {
-        m_aBtn[i].Create(108, 30, BITMAP_TEXT_BTN, 4, 2, 1);
+        m_aBtn[i].Create(kButtonWidth, kButtonHeight, BITMAP_TEXT_BTN, 4, 2, 1);
         m_aBtn[i].SetText(apszBtnText[i], adwBtnClr);
         CWin::RegisterButton(&m_aBtn[i]);
     }
@@ -61,11 +88,9 @@ void CSysMenuWin::Create()
     {
     case LOG_IN_SCENE:
         m_aBtn[SMW_BTN_SERVER_SEL].SetEnable(false);
-        m_winBack.SetLine(6);
         break;
     case CHARACTER_SCENE:
         m_aBtn[SMW_BTN_SERVER_SEL].SetEnable(true);
-        m_winBack.SetLine(10);
         break;
     }
 
@@ -82,15 +107,15 @@ void CSysMenuWin::SetPosition(int nXCoord, int nYCoord)
 {
     m_winBack.SetPosition(nXCoord, nYCoord);
 
-    int nBtnPosX = m_winBack.GetXPos() + (m_winBack.GetWidth() - m_aBtn[0].GetWidth()) / 2;
-    int nBtnGap = SMW_BTN_GAP + m_aBtn[0].GetHeight();
-    int nBtnPosBaseTop = m_winBack.GetYPos() + 33;
-    for (int i = 0; i < SMW_BTN_OPTION; ++i)
-        m_aBtn[i].SetPosition(nBtnPosX, nBtnPosBaseTop + i * nBtnGap);
-
-    int nCloseBtnPosY = m_winBack.GetYPos() + m_winBack.GetHeight() - 52;
-    m_aBtn[SMW_BTN_CLOSE].SetPosition(nBtnPosX, nCloseBtnPosY);
-    m_aBtn[SMW_BTN_OPTION].SetPosition(nBtnPosX, nCloseBtnPosY - nBtnGap);
+    const int buttonX = m_winBack.GetXPos() + (m_winBack.GetWidth() - kButtonWidth) / 2;
+    const int buttonStride = kButtonHeight + kButtonGap;
+    for (int button = SMW_BTN_GAME_END; button <= SMW_BTN_OPTION; ++button)
+    {
+        m_aBtn[button].SetPosition(
+            buttonX,
+            m_winBack.GetYPos() + kFirstButtonY + button * buttonStride);
+    }
+    m_aBtn[SMW_BTN_CLOSE].SetPosition(buttonX, m_winBack.GetYPos() + kCloseButtonY);
 }
 void CSysMenuWin::Show(bool bShow)
 {
@@ -152,6 +177,32 @@ void CSysMenuWin::UpdateWhileActive(double dDeltaTick)
 
 void CSysMenuWin::RenderControls()
 {
-    m_winBack.Render();
+    const int panelX = m_winBack.GetXPos();
+    const int panelY = m_winBack.GetYPos();
+
+    ::EnableAlphaBlend();
+    FillRect(panelX, panelY, kPanelWidth, kPanelHeight, 2, 3, 9, 218);
+    FillRect(panelX, panelY, kPanelWidth, 2, 100, 73, 37, 245);
+    FillRect(panelX, panelY + kPanelHeight - 2, kPanelWidth, 2, 100, 73, 37, 245);
+    FillRect(panelX, panelY, 2, kPanelHeight, 100, 73, 37, 245);
+    FillRect(panelX + kPanelWidth - 2, panelY, 2, kPanelHeight, 100, 73, 37, 245);
+    FillRect(panelX + 6, panelY + 6, kPanelWidth - 12, 1, 48, 44, 43, 210);
+    FillRect(panelX + 10, panelY + 47, kPanelWidth - 20, 1, 105, 76, 31, 170);
+    FillRect(panelX + 10, panelY + 222, kPanelWidth - 20, 1, 105, 76, 31, 125);
+    ::EndRenderColor();
+    ::DisableAlphaBlend();
+
+    ::EnableAlphaTest();
+    g_pRenderText->SetFont(g_hFixFont);
+    g_pRenderText->SetBgColor(0, 0, 0, 0);
+    g_pRenderText->SetTextColor(255, 205, 28, 255);
+    g_pRenderText->RenderText(
+        LogicalX(panelX),
+        LogicalY(panelY + 18),
+        L"Menu de Sistema",
+        LogicalX(kPanelWidth),
+        0,
+        RT3_SORT_CENTER);
+
     CWin::RenderButtons();
 }

@@ -17,7 +17,9 @@
 #include "Engine/Object/ZzzCharacter.h"
 #include "Engine/Object/ZzzInterface.h"
 #include "Render/Effects/ZzzEffect.h"
+#include "Data/GameConfig/GameConfig.h"
 #include "I18N/All.h"
+#include "Network/Server/ServerListManager.h"
 
 #include "GameLogic/Events/CSChaosCastle.h"
 #include "GameLogic/Events/Cinematic/CMVP1stDirection.h"
@@ -86,6 +88,27 @@ const float g_fMaxHeight = 1000.f;
 extern  short   g_shCameraLevel;
 
 static  float   g_fFrustumRange = -40.f;
+
+namespace
+{
+    bool ShouldStripTerrainSafezonesForPvp()
+    {
+        return g_ServerListManager != nullptr && g_ServerListManager->IsSelectedPvpServer();
+    }
+
+    void StripTerrainSafezonesForPvp()
+    {
+        if (!ShouldStripTerrainSafezonesForPvp())
+        {
+            return;
+        }
+
+        for (int i = 0; i < TERRAIN_SIZE * TERRAIN_SIZE; i++)
+        {
+            TerrainWall[i] = static_cast<WORD>(TerrainWall[i] & ~static_cast<WORD>(TW_SAFEZONE));
+        }
+    }
+}
 
 void InitTerrainMappingLayer()
 {
@@ -210,6 +233,8 @@ int OpenTerrainAttribute(wchar_t* FileName)
         ExitProgram();
         return (-1);
     }
+
+    StripTerrainSafezonesForPvp();
 
     fclose(fp);
     return iMap;
@@ -3102,7 +3127,10 @@ void RenderTerrain(bool EditFlag)
     if (!EditFlag)
     {
         EnableAlphaTest();
-        if (TerrainGrassEnable && gMapManager.WorldActive != WD_7ATLANSE && !IsDoppelGanger3())
+        if (TerrainGrassEnable
+            && !GameConfig::GetInstance().GetDisableHeavyEffects()
+            && gMapManager.WorldActive != WD_7ATLANSE
+            && !IsDoppelGanger3())
         {
             TerrainFlag = TERRAIN_MAP_GRASS;
             RenderTerrainFrustrum(EditFlag);

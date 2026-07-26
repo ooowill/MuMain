@@ -3,6 +3,7 @@
 #include "UI/NewUI/Dialogs/NewUIMessageBox.h"
 
 #include "GameLogic/Items/PersonalShopTitleImp.h"
+#include "Network/Server/ServerListManager.h"
 #include "World/MapInfra/MapManager.h"
 
 
@@ -637,6 +638,11 @@ void CNewUISystem::Show(DWORD dwKey)
         return;
 #endif //PBG_ADD_INGAMESHOP_UI_ITEMSHOP
     if (!m_pNewUIMng)
+    {
+        return;
+    }
+
+    if (dwKey == INTERFACE_MOVEMAP && g_ServerListManager->IsSelectedPvpServer())
     {
         return;
     }

@@ -58,6 +58,23 @@ public:
     int GetZoom() const { return m_zoom; }
     void SetZoom(int zoom);
 
+    // Game Performance
+    bool GetHideWorldObjects() const { return m_hideWorldObjects; }
+    bool GetDisableHeavyEffects() const { return m_disableHeavyEffects; }
+    bool GetReduceCharacterGlow() const { return m_reduceCharacterGlow; }
+    bool GetHideWings() const { return m_hideWings; }
+    bool GetHideMountsPets() const { return m_hideMountsPets; }
+    bool GetSimplifyOtherPlayers() const { return m_simplifyOtherPlayers; }
+    unsigned int GetGamePerformanceFlags() const;
+
+    void SetHideWorldObjects(bool enabled);
+    void SetDisableHeavyEffects(bool enabled);
+    void SetReduceCharacterGlow(bool enabled);
+    void SetHideWings(bool enabled);
+    void SetHideMountsPets(bool enabled);
+    void SetSimplifyOtherPlayers(bool enabled);
+    void SetGamePerformanceFlags(unsigned int flags);
+
     // Helpers
     static std::wstring BinaryToHex(const BYTE* data, DWORD size);
     static std::vector<BYTE> HexToBinary(const std::wstring& hex);
@@ -90,6 +107,13 @@ private:
     std::wstring m_uiLocale;
 
     int m_zoom;
+
+    bool m_hideWorldObjects;
+    bool m_disableHeavyEffects;
+    bool m_reduceCharacterGlow;
+    bool m_hideWings;
+    bool m_hideMountsPets;
+    bool m_simplifyOtherPlayers;
 
     int ReadInt(const wchar_t* section, const wchar_t* key, int defaultValue);
     void WriteInt(const wchar_t* section, const wchar_t* key, int value);

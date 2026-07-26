@@ -34,6 +34,8 @@ BYTE    g_byUpperBoneLocation[7] = { 25, 26, 27, 20, 34, 35, 36 };
 
 OBJECT Effects[MAX_EFFECTS];
 
+static bool s_PerformanceEffectsCleared = false;
+
 bool CheckCharacterRange(OBJECT* so, float Range, short PKKey, BYTE Kind = 0)
 {
     for (int i = 0; i < MAX_CHARACTERS_CLIENT; i++)
@@ -141,6 +143,49 @@ void TerminateOwnerEffectObject(int iOwnerObjectType)
             o->Owner = NULL;
         }
     }
+}
+
+void ClearPerformanceEffects()
+{
+    for (int i = 0; i < MAX_EFFECTS; ++i)
+    {
+        if (Effects[i].Live)
+        {
+            EffectDestructor(&Effects[i]);
+        }
+
+        Effects[i].Owner = NULL;
+    }
+
+    g_SkillEffects.DeleteAllEffects();
+
+    for (int i = 0; i < MAX_JOINTS; ++i)
+    {
+        Joints[i].Live = false;
+        Joints[i].Target = NULL;
+        Joints[i].NumTails = 0;
+    }
+
+    for (int i = 0; i < MAX_PARTICLES; ++i)
+    {
+        Particles[i].Live = false;
+        Particles[i].Target = NULL;
+    }
+
+    for (int i = 0; i < MAX_SPRITES; ++i)
+    {
+        Sprites[i].Live = false;
+        Sprites[i].Owner = NULL;
+    }
+
+    for (int i = 0; i < MAX_POINTS; ++i)
+    {
+        Points[i].Live = false;
+        Points[i].Target = NULL;
+    }
+
+    ClearAllObjectBlurs();
+    s_PerformanceEffectsCleared = true;
 }
 
 bool DeleteEffect(int Type, OBJECT* Owner, int iSubType)
@@ -1497,6 +1542,7 @@ void CreateEffect(int Type, vec3_t Position, vec3_t Angle, vec3_t Light, int Sub
             case MODEL_BIG_METEO1:
             case MODEL_BIG_METEO2:
             case MODEL_BIG_METEO3:
+
                 o->LifeTime = 100;
                 o->Scale = (float)(rand() % 10 + 4) * 0.1f;
                 Vector(0.f, -15.f / o->Scale, -30.f / o->Scale, o->Direction);
@@ -7075,6 +7121,7 @@ void MoveEffect(OBJECT* o, int iIndex)
     case MODEL_BIG_METEO1:
     case MODEL_BIG_METEO2:
     case MODEL_BIG_METEO3:
+
         Index = TERRAIN_INDEX_REPEAT((int)o->Position[0] / 100, (int)o->Position[1] / 100);
         if ((TerrainWall[Index] & TW_NOGROUND) != TW_NOGROUND)
         {
@@ -8596,6 +8643,18 @@ void MoveEffect(OBJECT* o, int iIndex)
 
 void MoveEffects()
 {
+    if (!g_pOption->GetRenderAllEffects())
+    {
+        if (!s_PerformanceEffectsCleared)
+        {
+            ClearPerformanceEffects();
+        }
+
+        return;
+    }
+
+    s_PerformanceEffectsCleared = false;
+
     if (SceneFlag == MAIN_SCENE)
     {
         g_pCatapultWindow->SetCameraPos();

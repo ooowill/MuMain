@@ -52,6 +52,7 @@
 #define	RECEIVE_CREATE_CHARACTER_SUCCESS        53
 #define	RECEIVE_CREATE_CHARACTER_FAIL           54
 #define	RECEIVE_CREATE_CHARACTER_FAIL2          55
+#define RECEIVE_CREATE_CHARACTER_EXCLUSIVE_NAME 58
 #define	REQUEST_DELETE_CHARACTER	            56
 #define	RECEIVE_DELETE_CHARACTER_SUCCESS        57
 #define REQUEST_JOIN_MAP_SERVER			        60
@@ -96,6 +97,10 @@ inline uint64_t ntoh64(uint64_t value)
 // Logs a size-mismatch when a typed safe_cast fails. Defined in WSclient.cpp
 // so the header stays free of g_ConsoleDebug includes.
 void LogSafeCastSizeMismatch(const char* packet_type, std::size_t received, std::size_t expected);
+void SendInitialCharacterListRequest();
+bool SendRequestCharacterPage(int pageIndex);
+bool SendRequestCharacterReorder(int sourceSlot, int targetSlot);
+void ApplyPendingServerListUi();
 
 // Casts a span to a packet struct, returning nullptr if the buffer is smaller
 // than sizeof(T). On failure, logs an MCD_ERROR with the packet type and the
@@ -327,17 +332,51 @@ typedef struct {
     char         Password[MAX_USERNAME_SIZE];
 } PRECEIVE_CONFIRM_PASSWORD2, * LPPRECEIVE_CONFIRM_PASSWORD2;
 
+#pragma pack(push, 1)
 typedef struct
 {
     BYTE         Index;
-    char         ID[MAX_USERNAME_SIZE];
+    char         ID[MAX_USERNAME_SIZE + 1];
+    WORD         Level;
+    BYTE		 CtlCode;
+    BYTE         Equipment[18];
+    BYTE         byGuildStatus;
+} PRECEIVE_CHARACTER_LIST, * LPPRECEIVE_CHARACTER_LIST;
+
+typedef struct
+{
+    BYTE         Index;
+    char         ID[MAX_USERNAME_SIZE + 1];
     WORD         Level;
     BYTE		 CtlCode;
     SERVER_CLASS_TYPE         Class;
     BYTE         Flags;
     BYTE         Equipment[EQUIPMENT_LENGTH_EXTENDED];
     BYTE         byGuildStatus;
+    BYTE         Reserved;
 } PRECEIVE_CHARACTER_LIST_EXTENDED, * LPPRECEIVE_CHARACTER_LIST_EXTENDED;
+
+typedef struct
+{
+    BYTE         Index;
+    char         ID[MAX_USERNAME_SIZE];
+    BYTE         LevelH;
+    BYTE         LevelL;
+    BYTE         CtlCode;
+    BYTE         Equipment[9];
+    BYTE         Reserved;
+} PRECEIVE_CHARACTER_LIST_075, * LPPRECEIVE_CHARACTER_LIST_075;
+
+typedef struct
+{
+    BYTE         Index;
+    char         ID[MAX_USERNAME_SIZE];
+    BYTE         Reserved;
+    WORD         Level;
+    BYTE         CtlCode;
+    BYTE         Equipment[11];
+} PRECEIVE_CHARACTER_LIST_095, * LPPRECEIVE_CHARACTER_LIST_095;
+#pragma pack(pop)
 
 //receive create character
 #pragma pack(push, 1)
@@ -350,7 +389,8 @@ typedef struct
     BYTE         Index;
     WORD         Level;
     BYTE         Class; // SERVER_CLASS_TYPE, shifted by 3 bits
-    //BYTE         Equipment[24];
+    BYTE         CtlCode;
+    BYTE         PreviewData[22];
 } PRECEIVE_CREATE_CHARACTER, * LPPRECEIVE_CREATE_CHARACTER;
 #pragma pack(pop)
 

@@ -15,8 +15,9 @@
 #define	CMW_SPR_DESC		2
 #define	CMW_SPR_MAX			3
 
-#define	CMW_DESC_LINE_MAX	2
-#define	CMW_DESC_ROW_MAX	75
+#define	CMW_DESC_LINE_MAX	4
+#define	CMW_DESC_ROW_MAX	44
+#define CMW_FUTURE_CLASS_COUNT 8
 
 class CCharMakeWin : public CWin
 {
@@ -24,11 +25,14 @@ protected:
     CWin	m_winBack;
     CSprite	m_asprBack[CMW_SPR_MAX];
     CButton	m_abtnJob[MAX_CLASS];
+    CSprite m_asprFutureJob[CMW_FUTURE_CLASS_COUNT];
+    CSprite m_sprClassSelectionBeam;
     CButton	m_aBtn[2];
 
     CLASS_TYPE		m_nSelJob;
     wchar_t	m_aszJobDesc[CMW_DESC_LINE_MAX][CMW_DESC_ROW_MAX];
     int		m_nDescLine;
+    double m_classSelectionBeamTime;
 
 public:
     CCharMakeWin();

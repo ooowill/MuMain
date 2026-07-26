@@ -19,6 +19,7 @@
 #include "Render/Textures/ZzzTexture.h"
 #include "GameLogic/Events/w_CursedTemple.h"
 #include "Network/Server/WSclient.h"
+#include "World/GameMaps/LoginSceneEnvironment.h"
 #include "I18N/All.h"
 
 
@@ -864,8 +865,13 @@ void CMapManager::Load() // OK
     case WD_73NEW_LOGIN_SCENE:
     case WD_74NEW_CHARACTER_SCENE:
     {
-        LoadBitmap(L"Logo\\MU-logo.tga", BITMAP_LOG_IN + 16, GL_LINEAR);
-        LoadBitmap(L"Logo\\MU-logo_g.jpg", BITMAP_LOG_IN + 17, GL_LINEAR);
+        if (gMapManager.WorldActive == WD_73NEW_LOGIN_SCENE)
+        {
+            LoadBitmap(L"Logo\\MU-logo.tga", BITMAP_LOG_IN + 16, GL_LINEAR);
+            LoadBitmap(L"Logo\\MU-logo_g.jpg", BITMAP_LOG_IN + 17, GL_LINEAR);
+            LoadBitmap(L"Logo\\cloud.jpg", BITMAP_CLOUD, GL_LINEAR, GL_CLAMP_TO_EDGE);
+            LoadWaveFile(SOUND_ELBELAND_WATERFALLSMALL01, L"Data\\Sound\\w52\\SE_Obj_waterfallsmall01.wav", 1);
+        }
     }
     break;
     case WD_55LOGINSCENE:
@@ -1095,6 +1101,11 @@ void CMapManager::Load() // OK
 
         for (i = MODEL_WORLD_OBJECT; i < MAX_WORLD_OBJECTS; i++)
             gLoadData.OpenTexture(i, L"Object1\\");
+    }
+    else if (this->WorldActive == WD_73NEW_LOGIN_SCENE
+        || this->WorldActive == WD_74NEW_CHARACTER_SCENE)
+    {
+        LoginSceneEnvironment::LoadModels();
     }
     else
     {

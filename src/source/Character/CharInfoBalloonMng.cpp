@@ -9,6 +9,7 @@
 #include "stdafx.h"
 #include "CharInfoBalloonMng.h"
 
+#include "AccountCharacterPaging.h"
 #include "CharInfoBalloon.h"
 
 CCharInfoBalloonMng::~CCharInfoBalloonMng()
@@ -32,7 +33,10 @@ void CCharInfoBalloonMng::Release()
 void CCharInfoBalloonMng::Create()
 {
     for (std::size_t i = 0; i < kBalloonCount; ++i)
-        m_charInfoBalloons[i].Create(&CharactersClient[i]);
+    {
+        const int slot = AccountCharacterPaging::GetVisibleSlot(static_cast<int>(i));
+        m_charInfoBalloons[i].Create(slot >= 0 ? &CharactersClient[i] : nullptr);
+    }
 
     m_isInitialized = true;
 }
@@ -43,11 +47,7 @@ void CCharInfoBalloonMng::Create()
 //*****************************************************************************
 void CCharInfoBalloonMng::Render()
 {
-    if (!m_isInitialized)
-        return;
-
-    for (auto& balloon : m_charInfoBalloons)
-        balloon.Render();
+    // Character details are rendered in the Season 21 list panel.
 }
 
 //*****************************************************************************
@@ -59,6 +59,9 @@ void CCharInfoBalloonMng::UpdateDisplay()
     if (!m_isInitialized)
         return;
 
-    for (auto& balloon : m_charInfoBalloons)
-        balloon.SetInfo();
+    for (std::size_t i = 0; i < kBalloonCount; ++i)
+    {
+        const int slot = AccountCharacterPaging::GetVisibleSlot(static_cast<int>(i));
+        m_charInfoBalloons[i].SetCharacter(slot >= 0 ? &CharactersClient[i] : nullptr);
+    }
 }

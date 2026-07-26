@@ -2,7 +2,13 @@
 #include "Core/Text/TextLineWrap.h"
 #include "UI/Chat/Chat.h"
 #include "Character/CharacterManager.h" // gCharacterManager
+#include "Character/GuildProfileClient.h"
+#include "Character/KillNotificationClient.h"
 #include "Camera/CameraProjection.h" // CameraProjection
+
+#include <algorithm>
+#include <cwchar>
+#include <iterator>
 
 // Includes mirror ZzzInterface.cpp, the unit these were extracted from.
 #include "Core/Platform/Imm.h"
@@ -54,9 +60,9 @@ namespace UI::Chat
 typedef struct
 {
     wchar_t   ID[32];
-    wchar_t      Union[30];
-    wchar_t      Guild[30];
-    wchar_t      szShopTitle[16];
+    wchar_t      Union[64];
+    wchar_t      Guild[64];
+    wchar_t      szShopTitle[32];
     char      Color;
     char      GuildColor;
     float       IDLifeTime;
@@ -72,6 +78,201 @@ typedef struct
 #define MAX_CHAT 120
 
 CHAT Chat[MAX_CHAT];
+
+namespace
+{
+    constexpr int kGuildMarkLineSize = 12;
+    constexpr int kGuildMarkLineGap = 4;
+    constexpr int kHoverCardWidth = 152;
+    constexpr int kHoverCardNoGuildHeight = 44;
+    constexpr int kHoverCardGuildHeight = 56;
+    constexpr int kHoverAvatarSize = 24;
+    constexpr int kHoverAvatarFrameSize = 28;
+    constexpr int kHoverGuildMarkSize = 10;
+
+    bool HasGuildMark(const CHARACTER* owner)
+    {
+        return owner != nullptr
+            && owner->GuildMarkIndex >= 0
+            && owner->GuildMarkIndex < MAX_MARKS
+            && GuildMark[owner->GuildMarkIndex].GuildName[0] != L'\0';
+    }
+
+    int GetGuildKey(const CHARACTER* owner)
+    {
+        return HasGuildMark(owner) ? GuildMark[owner->GuildMarkIndex].Key : -1;
+    }
+
+    bool TryGetGuildLevel(const CHARACTER* owner, unsigned int& level)
+    {
+        return GuildProfileClient::GetGuildLevel(GetGuildKey(owner), level);
+    }
+
+    const wchar_t* GetGuildRoleLabel(BYTE guildStatus)
+    {
+        switch (guildStatus)
+        {
+        case G_MASTER:
+            return I18N::Game::Master;
+        case G_SUB_MASTER:
+            return I18N::Game::AssistM;
+        case G_BATTLE_MASTER:
+            return I18N::Game::BattleM;
+        case G_PERSON:
+            return I18N::Game::Members;
+        default:
+            return L"Guild";
+        }
+    }
+
+    void BuildGuildLine(wchar_t* destination, size_t destinationLength, const CHARACTER* owner)
+    {
+        if (destination == nullptr || destinationLength == 0)
+        {
+            return;
+        }
+
+        destination[0] = L'\0';
+        if (!HasGuildMark(owner))
+        {
+            return;
+        }
+
+        unsigned int guildLevel = 0;
+        const wchar_t* guildName = GuildMark[owner->GuildMarkIndex].GuildName;
+        const wchar_t* role = GetGuildRoleLabel(owner->GuildStatus);
+        if (TryGetGuildLevel(owner, guildLevel))
+        {
+            swprintf_s(destination, destinationLength, L"[%ls] Nv.%u %ls", guildName, guildLevel, role);
+        }
+        else
+        {
+            swprintf_s(destination, destinationLength, L"[%ls] %ls", guildName, role);
+        }
+    }
+
+    void CopyWideText(wchar_t* destination, size_t destinationLength, const wchar_t* source)
+    {
+        if (destination == nullptr || destinationLength == 0)
+        {
+            return;
+        }
+
+        if (source == nullptr)
+        {
+            destination[0] = L'\0';
+            return;
+        }
+
+        std::wcsncpy(destination, source, destinationLength - 1);
+        destination[destinationLength - 1] = L'\0';
+    }
+
+    void DrawSolidRect(float x, float y, float width, float height, float red, float green, float blue, float alpha)
+    {
+        EnableAlphaTest();
+        glColor4f(red, green, blue, alpha);
+        RenderColor(x, y, width, height);
+        EndRenderColor();
+    }
+
+    void DrawBorder(float x, float y, float width, float height, float red, float green, float blue, float alpha)
+    {
+        DrawSolidRect(x, y, width, 1.f, red, green, blue, alpha);
+        DrawSolidRect(x, y + height - 1.f, width, 1.f, red, green, blue, alpha);
+        DrawSolidRect(x, y, 1.f, height, red, green, blue, alpha);
+        DrawSolidRect(x + width - 1.f, y, 1.f, height, red, green, blue, alpha);
+    }
+
+    void RenderGuildMarkIcon(const CHARACTER* owner, float x, float y, float size)
+    {
+        if (!HasGuildMark(owner))
+        {
+            return;
+        }
+
+        CreateGuildMark(owner->GuildMarkIndex);
+        RenderBitmap(BITMAP_GUILD, x, y, size, size);
+    }
+
+    bool IsSelectedPlayer(const CHAT* chat)
+    {
+        if (chat == nullptr || chat->Owner == nullptr || chat->Owner == Hero)
+        {
+            return false;
+        }
+
+        if (SelectedCharacter < 0 || SelectedCharacter >= MAX_CHARACTERS_CLIENT)
+        {
+            return false;
+        }
+
+        return chat->Owner == &CharactersClient[SelectedCharacter]
+            && chat->Owner->Object.Kind == KIND_PLAYER
+            && chat->Owner->Object.Type == MODEL_PLAYER;
+    }
+
+    void RenderHoverCard(CHAT* chat)
+    {
+        if (!IsSelectedPlayer(chat))
+        {
+            return;
+        }
+
+        const bool hasGuild = HasGuildMark(chat->Owner);
+        const int cardHeight = hasGuild ? kHoverCardGuildHeight : kHoverCardNoGuildHeight;
+        int cardX = chat->x + chat->Width + 8;
+        int cardY = chat->y - 6;
+
+        if (cardX + kHoverCardWidth > static_cast<int>(WindowWidth) - 6)
+        {
+            cardX = chat->x - kHoverCardWidth - 8;
+        }
+
+        cardX = std::clamp(cardX, 6, static_cast<int>(WindowWidth) - kHoverCardWidth - 6);
+        cardY = std::clamp(cardY, 6, static_cast<int>(WindowHeight) - cardHeight - 6);
+
+        DrawSolidRect(static_cast<float>(cardX + 2), static_cast<float>(cardY + 3), static_cast<float>(kHoverCardWidth), static_cast<float>(cardHeight), 0.f, 0.f, 0.f, 0.48f);
+        DrawSolidRect(static_cast<float>(cardX), static_cast<float>(cardY), static_cast<float>(kHoverCardWidth), static_cast<float>(cardHeight), 0.020f, 0.026f, 0.036f, 0.88f);
+        DrawSolidRect(static_cast<float>(cardX + 1), static_cast<float>(cardY + 1), static_cast<float>(kHoverCardWidth - 2), 13.f, 0.23f, 0.14f, 0.035f, 0.82f);
+        DrawSolidRect(static_cast<float>(cardX + kHoverCardWidth - 36), static_cast<float>(cardY), 34.f, 3.f, 0.76f, 0.55f, 0.18f, 0.95f);
+        DrawBorder(static_cast<float>(cardX), static_cast<float>(cardY), static_cast<float>(kHoverCardWidth), static_cast<float>(cardHeight), 0.65f, 0.46f, 0.14f, 0.78f);
+
+        const int avatarFrameX = cardX + kHoverCardWidth - kHoverAvatarFrameSize - 5;
+        const int avatarFrameY = cardY + 5;
+        DrawSolidRect(static_cast<float>(avatarFrameX), static_cast<float>(avatarFrameY), static_cast<float>(kHoverAvatarFrameSize), static_cast<float>(kHoverAvatarFrameSize), 0.07f, 0.055f, 0.035f, 0.92f);
+        DrawBorder(static_cast<float>(avatarFrameX), static_cast<float>(avatarFrameY), static_cast<float>(kHoverAvatarFrameSize), static_cast<float>(kHoverAvatarFrameSize), 0.78f, 0.58f, 0.22f, 0.86f);
+        KillNotificationClient::RenderProfileAvatar(chat->ID, static_cast<float>(avatarFrameX + 2), static_cast<float>(avatarFrameY + 2), static_cast<float>(kHoverAvatarSize));
+
+        const int textX = cardX + 8;
+        const int textWidth = kHoverCardWidth - kHoverAvatarFrameSize - 18;
+
+        g_pRenderText->SetFont(g_hFontBold);
+        g_pRenderText->SetBgColor(0);
+        g_pRenderText->SetTextColor(255, 218, 94, 255);
+        g_pRenderText->RenderText(textX, cardY + 3, chat->ID, textWidth, 0, RT3_SORT_LEFT);
+
+        g_pRenderText->SetFont(g_hFont);
+        g_pRenderText->SetTextColor(210, 220, 235, 255);
+        wchar_t classLine[64] = {};
+        swprintf_s(classLine, L"%ls %d", gCharacterManager.GetCharacterClassText(chat->Owner->Class), chat->Owner->Level);
+        g_pRenderText->RenderText(textX, cardY + 19, classLine, textWidth, 0, RT3_SORT_LEFT);
+
+        if (!hasGuild)
+        {
+            g_pRenderText->SetTextColor(150, 160, 172, 255);
+            g_pRenderText->RenderText(textX, cardY + 33, L"Sem guild", kHoverCardWidth - 16, 0, RT3_SORT_LEFT);
+            return;
+        }
+
+        RenderGuildMarkIcon(chat->Owner, static_cast<float>(textX), static_cast<float>(cardY + 36), static_cast<float>(kHoverGuildMarkSize));
+
+        wchar_t guildLine[64] = {};
+        BuildGuildLine(guildLine, std::size(guildLine), chat->Owner);
+        g_pRenderText->SetTextColor(255, 232, 165, 255);
+        g_pRenderText->RenderText(textX + kHoverGuildMarkSize + 4, cardY + 34, guildLine, kHoverCardWidth - kHoverGuildMarkSize - 20, 0, RT3_SORT_LEFT);
+    }
+}
 
 void SetBooleanPosition(CHAT* c)
 {
@@ -94,6 +295,10 @@ void SetBooleanPosition(CHAT* c)
     bResult[2] = GetTextExtentPoint32(g_pRenderText->GetFontDC(), c->Text[1], lstrlen(c->Text[1]), &Size[2]);
     bResult[3] = GetTextExtentPoint32(g_pRenderText->GetFontDC(), c->Union, lstrlen(c->Union), &Size[3]);
     bResult[4] = GetTextExtentPoint32(g_pRenderText->GetFontDC(), c->Guild, lstrlen(c->Guild), &Size[4]);
+    if (HasGuildMark(c->Owner) && c->Guild[0] != L'\0')
+    {
+        Size[4].cx += (kGuildMarkLineSize + kGuildMarkLineGap) * g_fScreenRate_x;
+    }
 
     Size[0].cx += 3;
 
@@ -260,7 +465,26 @@ void RenderBoolean(int x, int y, CHAT* c)
     }
     if (c->Guild && c->Guild[0])
     {
-        g_pRenderText->RenderText(RenderPos.x, RenderPos.y, c->Guild, RenderBoxSize.cx, iLineHeight, RT3_SORT_LEFT);
+        if (HasGuildMark(c->Owner))
+        {
+            RenderGuildMarkIcon(
+                c->Owner,
+                static_cast<float>(RenderPos.x),
+                static_cast<float>(RenderPos.y + 1),
+                static_cast<float>(kGuildMarkLineSize));
+            g_pRenderText->RenderText(
+                RenderPos.x + kGuildMarkLineSize + kGuildMarkLineGap,
+                RenderPos.y,
+                c->Guild,
+                RenderBoxSize.cx - kGuildMarkLineSize - kGuildMarkLineGap,
+                iLineHeight,
+                RT3_SORT_LEFT);
+        }
+        else
+        {
+            g_pRenderText->RenderText(RenderPos.x, RenderPos.y, c->Guild, RenderBoxSize.cx, iLineHeight, RT3_SORT_LEFT);
+        }
+
         RenderPos.y += iLineHeight;
     }
 
@@ -351,6 +575,8 @@ void RenderBoolean(int x, int y, CHAT* c)
         else if (2 == c->Owner->m_byGensInfluence)
             g_pNewUIGensRanking->RanderMark(x, y, (SEASON3B::CNewUIGensRanking::GENS_TYPE)c->Owner->m_byGensInfluence, c->Owner->GensRanking, SEASON3B::CNewUIGensRanking::MARK_BOOLEAN, (float)RenderPos.y);
     }
+
+    RenderHoverCard(c);
 }
 void AddChat(CHAT* c, const wchar_t* chat_text, int flag)
 {
@@ -387,7 +613,7 @@ void AddGuildName(CHAT* c, CHARACTER* Owner)
     {
         std::wstring summary;
         GetShopTitleSummary(Owner, summary);
-        wcscpy(c->szShopTitle, summary.c_str());
+        CopyWideText(c->szShopTitle, std::size(c->szShopTitle), summary.c_str());
     }
     else {
         c->szShopTitle[0] = '\0';
@@ -422,17 +648,7 @@ void AddGuildName(CHAT* c, CHARACTER* Owner)
     if (Owner->GuildMarkIndex >= 0)
     {
         c->GuildColor = Owner->GuildTeam;
-
-        if (Owner->GuildStatus == G_PERSON)
-            mu_swprintf(c->Guild, L"[%ls] %ls", GuildMark[Owner->GuildMarkIndex].GuildName, I18N::Game::Members);
-        else if (Owner->GuildStatus == G_MASTER)
-            mu_swprintf(c->Guild, L"[%ls] %ls", GuildMark[Owner->GuildMarkIndex].GuildName, I18N::Game::Master);
-        else if (Owner->GuildStatus == G_SUB_MASTER)
-            mu_swprintf(c->Guild, L"[%ls] %ls", GuildMark[Owner->GuildMarkIndex].GuildName, I18N::Game::AssistM);
-        else if (Owner->GuildStatus == G_BATTLE_MASTER)
-            mu_swprintf(c->Guild, L"[%ls] %ls", GuildMark[Owner->GuildMarkIndex].GuildName, I18N::Game::BattleM);
-        else
-            mu_swprintf(c->Guild, L"[%ls]", GuildMark[Owner->GuildMarkIndex].GuildName);
+        BuildGuildLine(c->Guild, std::size(c->Guild), Owner);
     }
     else
     {

@@ -254,26 +254,26 @@ public:
 
     static bool CreatePersonalItemTable()
     {
-        if (ms_pSeller != NULL || ms_pBuyer != NULL)
-            return false;	//. error
+        if (ms_pSeller != NULL && ms_pBuyer != NULL)
+            return true;
 
-        ms_pSeller = new CPersonalItemPriceTable;
-        ms_pBuyer = new CPersonalItemPriceTable;
+        if (ms_pSeller == NULL)
+        {
+            ms_pSeller = new CPersonalItemPriceTable;
+        }
+
+        if (ms_pBuyer == NULL)
+        {
+            ms_pBuyer = new CPersonalItemPriceTable;
+        }
 
         return true;
     }
     static void ReleasePersonalItemTable()
     {
-        if (ms_pSeller)
-        {
-            delete ms_pSeller;
-            ms_pSeller = NULL;
-        }
-        if (ms_pBuyer)
-        {
-            delete ms_pBuyer;
-            ms_pBuyer = NULL;
-        }
+        // Keep these tiny singleton tables alive for the process lifetime.
+        // Some scene transitions can still have UI cleanup touching shop state;
+        // deleting the std::map here has produced crashes in release builds.
     }
     static CPersonalItemPriceTable* GetObjPtr(int type)
     {

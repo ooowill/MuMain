@@ -348,25 +348,29 @@ namespace
             return false;
         }
 
-        Gdiplus::Bitmap bitmap(path.c_str());
-        if (bitmap.GetLastStatus() != Gdiplus::Ok)
-        {
-            return false;
-        }
-
         const std::wstring convertedPath = path + L".converted.jpg";
-        ULONG quality = 90;
-        Gdiplus::EncoderParameters parameters {};
-        parameters.Count = 1;
-        parameters.Parameter[0].Guid = Gdiplus::EncoderQuality;
-        parameters.Parameter[0].Type = Gdiplus::EncoderParameterValueTypeLong;
-        parameters.Parameter[0].NumberOfValues = 1;
-        parameters.Parameter[0].Value = &quality;
-
-        if (bitmap.Save(convertedPath.c_str(), &jpegClsid, &parameters) != Gdiplus::Ok)
         {
-            DeleteFileW(convertedPath.c_str());
-            return false;
+            // GDI+ keeps the source file open for the lifetime of Bitmap. Destroy it
+            // before replacing the downloaded PNG/WebP which is cached with a .jpg name.
+            Gdiplus::Bitmap bitmap(path.c_str());
+            if (bitmap.GetLastStatus() != Gdiplus::Ok)
+            {
+                return false;
+            }
+
+            ULONG quality = 90;
+            Gdiplus::EncoderParameters parameters {};
+            parameters.Count = 1;
+            parameters.Parameter[0].Guid = Gdiplus::EncoderQuality;
+            parameters.Parameter[0].Type = Gdiplus::EncoderParameterValueTypeLong;
+            parameters.Parameter[0].NumberOfValues = 1;
+            parameters.Parameter[0].Value = &quality;
+
+            if (bitmap.Save(convertedPath.c_str(), &jpegClsid, &parameters) != Gdiplus::Ok)
+            {
+                DeleteFileW(convertedPath.c_str());
+                return false;
+            }
         }
 
         if (!MoveFileExW(convertedPath.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING))
@@ -559,6 +563,7 @@ namespace
         }
 
         const std::wstring initial = InitialFor(name);
+        g_pRenderText->SetFont(g_hFontBold);
         g_pRenderText->SetBgColor(0);
         g_pRenderText->SetTextColor(245, 214, 150, static_cast<BYTE>(230.0f * alpha));
         g_pRenderText->RenderText(static_cast<int>(x), static_cast<int>(y + size * 0.36f), initial.c_str(), static_cast<int>(size), 0, RT3_SORT_CENTER);
@@ -587,6 +592,7 @@ namespace
         RenderAvatar(notification.VictimAvatarUrl, notification.VictimName, x + kRightAvatarX, y + kAvatarY, kAvatarSize, alpha);
 
         const BYTE textAlpha = static_cast<BYTE>(240.0f * alpha);
+        g_pRenderText->SetFont(g_hFontBold);
         g_pRenderText->SetBgColor(0);
         g_pRenderText->SetTextColor(255, 240, 205, textAlpha);
         g_pRenderText->RenderText(static_cast<int>(x + 18.0f), static_cast<int>(y + 5.0f), notification.KillerName.c_str(), 32, 0, RT3_SORT_CENTER);

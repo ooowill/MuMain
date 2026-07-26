@@ -15,6 +15,7 @@
 #include "GameLogic/Items/PersonalShopTitleImp.h"
 #include "Guild/UIGuildInfo.h"
 #include "Engine/AI/ZzzAI.h"
+#include "UI/Legacy/UIManager.h"
 #include "World/MapInfra/MapManager.h"
 
 using namespace SEASON3B;
@@ -468,9 +469,7 @@ bool SEASON3B::CNewUICommandWindow::CommandPurchase(CHARACTER* pSelectedCha)
     if (pSelectedCha == nullptr)
         return false;
 
-    SocketClient->ToGameServer()->SendPlayerShopItemListRequest(pSelectedCha->Key, pSelectedCha->ID);
-
-    return true;
+    return LaunchPersonalStoreBrowserOverlayForSeller(pSelectedCha->ID);
 }
 
 bool SEASON3B::CNewUICommandWindow::CommandParty(SHORT iChaKey)

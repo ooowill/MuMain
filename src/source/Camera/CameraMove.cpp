@@ -47,6 +47,8 @@ namespace
     constexpr float kWaypointRenderOffset = 50.0f;
     constexpr float kWaypointRenderHalfSize = 10.0f;
     constexpr float kTourCameraZPosition = -300.0f;
+    constexpr float kLoginSceneFocusX = 21700.0f;
+    constexpr float kLoginSceneFocusY = 6550.0f;
 
     template <typename T>
     constexpr const T& Clamp(const T& value, const T& minValue, const T& maxValue)
@@ -124,6 +126,16 @@ namespace
     {
         return {(a.x * (1.0f - alpha)) + (b.x * alpha), (a.y * (1.0f - alpha)) + (b.y * alpha)};
     }
+
+    CameraVector2 GetTourLookDirection(float cameraX, float cameraY, const CameraVector2& pathDirection)
+    {
+        if (gMapManager.WorldActive != WD_73NEW_LOGIN_SCENE)
+        {
+            return pathDirection;
+        }
+
+        return CameraVector2{kLoginSceneFocusX - cameraX, kLoginSceneFocusY - cameraY}.Normalized();
+    }
 }
 
 // LoginScene camera offset correction
@@ -139,7 +151,7 @@ namespace
 float g_LoginSceneOffsetX   = LoginSceneCameraDefaults::OFFSET_X;
 float g_LoginSceneOffsetY   = LoginSceneCameraDefaults::OFFSET_Y;
 float g_LoginSceneOffsetZ   = LoginSceneCameraDefaults::OFFSET_Z;
-float g_LoginSceneAnglePitch = LoginSceneCameraDefaults::ANGLE_PITCH;
+float g_LoginSceneAnglePitch = LoginSceneCameraDefaults::ANGLE_PITCH; // Balances the waterfall, statues, and lake in frame.
 float g_LoginSceneAngleYaw   = LoginSceneCameraDefaults::ANGLE_YAW;
 
 // Applies the LoginScene waypoint correction to a world-space position in-place.
@@ -676,15 +688,16 @@ BOOL CCameraMove::SetTourMode(BOOL bFlag, BOOL bRandomStart, int index)
     m_CameraStartPos[1] = m_CurrentCameraPos[1] = m_vTourCameraPos[1] = startWaypoint->fCameraY;
     m_CameraStartPos[2] = m_CurrentCameraPos[2] = m_vTourCameraPos[2] = startWaypoint->fCameraZ;
 
-    // FIX: Apply position offset for LoginScene waypoints during initialization
-    // Offset is also applied in GetCurrentCameraPos() for ongoing tour movement
-    ApplyLoginSceneOffset(m_CameraStartPos[0], m_CameraStartPos[1], m_CameraStartPos[2]);
-    ApplyLoginSceneOffset(m_CurrentCameraPos[0], m_CurrentCameraPos[1], m_CurrentCameraPos[2]);
-    ApplyLoginSceneOffset(m_vTourCameraPos[0], m_vTourCameraPos[1], m_vTourCameraPos[2]);
+    // Keep tour state in script coordinates. GetCurrentCameraPos applies the
+    // LoginScene presentation offset once when exposing the camera position.
 
     CameraVector2 toTarget{targetWaypoint->fCameraX - startWaypoint->fCameraX, targetWaypoint->fCameraY - startWaypoint->fCameraY};
     const CameraVector2 forwardDir = toTarget.Normalized();
-    m_fTargetTourCameraAngle = m_fTourCameraAngle = CreateAngle(0, 0, forwardDir.x, -forwardDir.y);
+    const CameraVector2 lookDirection = GetTourLookDirection(
+        startWaypoint->fCameraX,
+        startWaypoint->fCameraY,
+        forwardDir);
+    m_fTargetTourCameraAngle = m_fTourCameraAngle = CreateAngle(0, 0, lookDirection.x, -lookDirection.y);
 
     return TRUE;
 }
@@ -809,7 +822,11 @@ void CCameraMove::UpdateTourWayPoint()
 
             if (distanceToTarget > 5.0f && distanceToOrigin > 5.0f)
             {
-                m_fTargetTourCameraAngle = CreateAngle(0, 0, tourDir.x, -tourDir.y);
+                const CameraVector2 lookDirection = GetTourLookDirection(
+                    m_CurrentCameraPos[0],
+                    m_CurrentCameraPos[1],
+                    tourDir);
+                m_fTargetTourCameraAngle = CreateAngle(0, 0, lookDirection.x, -lookDirection.y);
             }
 
             const float angleDelta = SignedAngleDelta(m_fTourCameraAngle, m_fTargetTourCameraAngle);

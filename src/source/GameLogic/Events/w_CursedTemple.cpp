@@ -25,8 +25,8 @@
 
 
 extern int TextNum;
-extern wchar_t TextList[50][100];
-extern int  TextListColor[50];
+extern wchar_t TextList[64][100];
+extern int  TextListColor[64];
 
 
 using namespace SEASON3A;

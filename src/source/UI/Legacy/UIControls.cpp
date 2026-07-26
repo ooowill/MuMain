@@ -6232,7 +6232,7 @@ CUIBuyingListBox::CUIBuyingListBox()
     SetSize(LISTBOX_WIDTH, LISTBOX_HEIGHT);
 }
 
-extern wchar_t TextList[50][100];
+extern wchar_t TextList[64][100];
 
 void CUIBuyingListBox::AddText(const wchar_t* pszExplanationText)
 {
@@ -6658,6 +6658,7 @@ void CUIExtraItemListBox::AddText(const wchar_t* pszPattern)
 
     static FILTERLIST_TEXT text;
     wcsncpy(text.m_szPattern, pszPattern, MAX_ITEM_NAME + 1);
+    text.m_szPattern[MAX_ITEM_NAME] = L'\0';
     text.m_bIsSelected = FALSE;
     m_TextList.push_front(text);
 

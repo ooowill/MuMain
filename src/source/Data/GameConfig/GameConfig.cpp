@@ -73,6 +73,13 @@ void GameConfig::Load()
 
     m_zoom = ReadInt(CfgSectionCamera, CfgKeyZoom, CfgDefaultZoom);
 
+    m_hideWorldObjects = ReadBool(CfgSectionGamePerformance, CfgKeyHideWorldObjects, CfgDefaultHideWorldObjects);
+    m_disableHeavyEffects = ReadBool(CfgSectionGamePerformance, CfgKeyDisableHeavyEffects, CfgDefaultDisableHeavyEffects);
+    m_reduceCharacterGlow = ReadBool(CfgSectionGamePerformance, CfgKeyReduceCharacterGlow, CfgDefaultReduceCharacterGlow);
+    m_hideWings = ReadBool(CfgSectionGamePerformance, CfgKeyHideWings, CfgDefaultHideWings);
+    m_hideMountsPets = ReadBool(CfgSectionGamePerformance, CfgKeyHideMountsPets, CfgDefaultHideMountsPets);
+    m_simplifyOtherPlayers = ReadBool(CfgSectionGamePerformance, CfgKeySimplifyOtherPlayers, CfgDefaultSimplifyOtherPlayers);
+
     // Strip keys/sections we used to write but no longer use, so user config
     // files don't accumulate orphans. Append one line per retired key — no
     // central registry of valid keys to keep in sync.
@@ -110,6 +117,13 @@ void GameConfig::Save()
     WriteString(CfgSectionUI, CfgKeyUILocale, m_uiLocale);
 
     WriteInt(CfgSectionCamera, CfgKeyZoom, m_zoom);
+
+    WriteBool(CfgSectionGamePerformance, CfgKeyHideWorldObjects, m_hideWorldObjects);
+    WriteBool(CfgSectionGamePerformance, CfgKeyDisableHeavyEffects, m_disableHeavyEffects);
+    WriteBool(CfgSectionGamePerformance, CfgKeyReduceCharacterGlow, m_reduceCharacterGlow);
+    WriteBool(CfgSectionGamePerformance, CfgKeyHideWings, m_hideWings);
+    WriteBool(CfgSectionGamePerformance, CfgKeyHideMountsPets, m_hideMountsPets);
+    WriteBool(CfgSectionGamePerformance, CfgKeySimplifyOtherPlayers, m_simplifyOtherPlayers);
 }
 
 void GameConfig::SetWindowSize(int width, int height)
@@ -171,6 +185,58 @@ void GameConfig::SetServerPort(int port)
 void GameConfig::SetZoom(int zoom)
 {
     m_zoom = zoom;
+}
+
+void GameConfig::SetHideWorldObjects(bool enabled)
+{
+    m_hideWorldObjects = enabled;
+}
+
+void GameConfig::SetDisableHeavyEffects(bool enabled)
+{
+    m_disableHeavyEffects = enabled;
+}
+
+void GameConfig::SetReduceCharacterGlow(bool enabled)
+{
+    m_reduceCharacterGlow = enabled;
+}
+
+void GameConfig::SetHideWings(bool enabled)
+{
+    m_hideWings = enabled;
+}
+
+void GameConfig::SetHideMountsPets(bool enabled)
+{
+    m_hideMountsPets = enabled;
+}
+
+void GameConfig::SetSimplifyOtherPlayers(bool enabled)
+{
+    m_simplifyOtherPlayers = enabled;
+}
+
+unsigned int GameConfig::GetGamePerformanceFlags() const
+{
+    unsigned int flags = 0;
+    flags |= m_hideWorldObjects ? 1u << 0 : 0u;
+    flags |= m_disableHeavyEffects ? 1u << 1 : 0u;
+    flags |= m_reduceCharacterGlow ? 1u << 2 : 0u;
+    flags |= m_hideWings ? 1u << 3 : 0u;
+    flags |= m_hideMountsPets ? 1u << 4 : 0u;
+    flags |= m_simplifyOtherPlayers ? 1u << 5 : 0u;
+    return flags;
+}
+
+void GameConfig::SetGamePerformanceFlags(unsigned int flags)
+{
+    m_hideWorldObjects = (flags & (1u << 0)) != 0;
+    m_disableHeavyEffects = (flags & (1u << 1)) != 0;
+    m_reduceCharacterGlow = (flags & (1u << 2)) != 0;
+    m_hideWings = (flags & (1u << 3)) != 0;
+    m_hideMountsPets = (flags & (1u << 4)) != 0;
+    m_simplifyOtherPlayers = (flags & (1u << 5)) != 0;
 }
 
 // Helper function to convert binary data to hex string

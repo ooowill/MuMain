@@ -1,6 +1,9 @@
 #include "stdafx.h"
 #include "UI/Chat/Chat.h"
+#include <algorithm>
+#include <atomic>
 #include <memory>
+#include <cwchar>
 #include "UI/Legacy/UIManager.h"
 #include "Guild/GuildCache.h"
 #include "Render/Models/ZzzBMD.h"
@@ -55,6 +58,15 @@
 #include "GameLogic/Skills/SkillManager.h"
 
 #include "Character/CharacterManager.h"
+#include "Character/AccountCharacterList.h"
+#include "Character/AccountCharacterPaging.h"
+#include "Character/AccountCompanionClient.h"
+#include "Character/AzothClient.h"
+#include "Character/GuildProfileClient.h"
+#include "Character/JewelBankClient.h"
+#include "Character/ItemEvolutionClient.h"
+#include "Character/KillNotificationClient.h"
+#include "Data/GameConfig/GameConfig.h"
 
 #ifdef KJH_ADD_INGAMESHOP_UI_SYSTEM
 #include "GameShop/InGameShopSystem.h"
@@ -73,7 +85,16 @@
 #include "FatigueTimeSystem.h"
 #endif //PBG_ADD_SECRETBUFF
 #include <codecvt>
+#include <cstring>
+#include <deque>
+#include <iterator>
 #include <limits>
+
+namespace
+{
+    std::atomic_bool g_ServerListUiRefreshPending{ false };
+}
+#include <vector>
 
 #include "ServerListManager.h"
 #include "GameLogic/Social/MonkSystem.h"
@@ -140,6 +161,164 @@ wchar_t    Question[31];
 
 #define FIRST_CROWN_SWITCH_NUMBER	322
 
+namespace
+{
+    std::deque<int> g_expectedCharacterListResponsePages;
+
+    void ResetCharacterMachineEquipment()
+    {
+        if (CharacterMachine == nullptr)
+        {
+            return;
+        }
+
+        for (auto& item : CharacterMachine->Equipment)
+        {
+            memset(&item, 0, sizeof(item));
+            item.Type = -1;
+            item.Number = -1;
+            std::fill(std::begin(item.bySocketOption), std::end(item.bySocketOption), SOCKET_EMPTY);
+            std::fill(std::begin(item.SocketSeedID), std::end(item.SocketSeedID), SOCKET_EMPTY);
+        }
+    }
+
+    int ClampCharacterPageIndex(int pageIndex)
+    {
+        return std::clamp(pageIndex, 0, std::max(0, AccountCharacterPaging::GetPageCount() - 1));
+    }
+
+    bool IsValidClientCharacter(const CHARACTER* character)
+    {
+        return character != nullptr
+            && character >= CharactersClient
+            && character < CharactersClient + MAX_CHARACTERS_CLIENT;
+    }
+
+    bool ShouldFeedMuHelperTarget(CHARACTER* character)
+    {
+        if (character == nullptr)
+        {
+            return false;
+        }
+
+        if (IsMonster(character))
+        {
+            return true;
+        }
+
+        const int index = FindCharacterIndex(character->Key);
+        if (index == MAX_CHARACTERS_CLIENT)
+        {
+            return false;
+        }
+
+        return IsPvpServerAutoAttackTarget(character, index);
+    }
+
+    void QueueExpectedCharacterListResponsePage(int pageIndex)
+    {
+        g_expectedCharacterListResponsePages.push_back(ClampCharacterPageIndex(pageIndex));
+    }
+
+    int ConsumeExpectedCharacterListResponsePage()
+    {
+        if (g_expectedCharacterListResponsePages.empty())
+        {
+            return AccountCharacterPaging::GetCurrentPage();
+        }
+
+        const int pageIndex = g_expectedCharacterListResponsePages.front();
+        g_expectedCharacterListResponsePages.pop_front();
+        return ClampCharacterPageIndex(pageIndex);
+    }
+
+    bool SendCharacterPageRequestPacket(int pageIndex, bool updateProtocolState)
+    {
+        if (SocketClient == nullptr || SocketClient->ToGameServer() == nullptr)
+        {
+            return false;
+        }
+
+        const int clampedPageIndex = ClampCharacterPageIndex(pageIndex);
+        const BYTE safePageIndex = static_cast<BYTE>(clampedPageIndex);
+        BYTE packet[6] = { 0xC1, sizeof(packet), 0xF3, 0xF0, safePageIndex, g_pMultiLanguage->GetLanguage() };
+
+        QueueExpectedCharacterListResponsePage(clampedPageIndex);
+        SocketClient->Send(packet, static_cast<int>(sizeof(packet)));
+
+        if (updateProtocolState)
+        {
+            CurrentProtocolState = REQUEST_CHARACTERS_LIST;
+        }
+
+        return true;
+    }
+}
+
+void SendInitialCharacterListRequest()
+{
+    AccountCharacterPaging::ResetToFirstPageWithoutRefresh();
+    AccountCompanionClient::ResetLocalState();
+    GuildProfileClient::Reset();
+    KillNotificationClient::Reset();
+    AccountCharacterList::Clear();
+    g_expectedCharacterListResponsePages.clear();
+    if (SocketClient == nullptr || SocketClient->ToGameServer() == nullptr)
+    {
+        return;
+    }
+
+    QueueExpectedCharacterListResponsePage(0);
+    SocketClient->ToGameServer()->SendRequestCharacterList(g_pMultiLanguage->GetLanguage());
+
+    for (int pageIndex = 1; pageIndex < AccountCharacterPaging::GetPageCount(); ++pageIndex)
+    {
+        SendCharacterPageRequestPacket(pageIndex, false);
+    }
+
+    CurrentProtocolState = REQUEST_CHARACTERS_LIST;
+}
+
+bool SendRequestCharacterPage(int pageIndex)
+{
+    return SendCharacterPageRequestPacket(pageIndex, true);
+}
+
+bool SendRequestCharacterReorder(int sourceSlot, int targetSlot)
+{
+    if (SocketClient == nullptr
+        || SocketClient->ToGameServer() == nullptr
+        || sourceSlot < 0
+        || sourceSlot >= AccountCharacterList::MaxCharacters
+        || targetSlot < 0
+        || targetSlot >= AccountCharacterList::MaxCharacters
+        || sourceSlot == targetSlot)
+    {
+        g_ErrorReport.Write(
+            L"[CharacterReorder] request rejected source=%d target=%d socket=%d gameServer=%d\r\n",
+            sourceSlot,
+            targetSlot,
+            SocketClient != nullptr ? 1 : 0,
+            SocketClient != nullptr && SocketClient->ToGameServer() != nullptr ? 1 : 0);
+        return false;
+    }
+
+    BYTE packet[6] = {
+        0xC1,
+        sizeof(packet),
+        0xF3,
+        0xF2,
+        static_cast<BYTE>(sourceSlot),
+        static_cast<BYTE>(targetSlot),
+    };
+    g_ErrorReport.Write(
+        L"[CharacterReorder] sending request source=%d target=%d\r\n",
+        sourceSlot,
+        targetSlot);
+    SocketClient->Send(packet, static_cast<int>(sizeof(packet)));
+    return true;
+}
+
 void AddDebugText(const unsigned char* Buffer, int Size)
 {
     if (DebugTextCount > MAX_DEBUG_MAX - 1)
@@ -164,6 +343,250 @@ static void HandleIncomingPacket(int32_t Handle, const BYTE* ReceiveBuffer, int3
 
 static constexpr int64_t kInt64Max = std::numeric_limits<int64_t>::max();
 static constexpr int64_t kInt64Min = std::numeric_limits<int64_t>::min();
+
+static int ResolveAccountCharacterSlot(BYTE serverIndex, const wchar_t* characterName)
+{
+    const int existingNameSlot = AccountCharacterList::FindSlotByName(characterName);
+    if (existingNameSlot >= 0)
+    {
+        return existingNameSlot;
+    }
+
+    const int requestedSlot = static_cast<int>(serverIndex);
+    if (requestedSlot >= 0 && requestedSlot < AccountCharacterList::MaxCharacters)
+    {
+        const AccountCharacterList::Entry* existingEntry = AccountCharacterList::GetBySlot(requestedSlot);
+        if (existingEntry == nullptr || std::wcscmp(existingEntry->Name, characterName) == 0)
+        {
+            return requestedSlot;
+        }
+    }
+
+    return AccountCharacterList::FindFirstEmptySlot();
+}
+
+enum class CharacterListPacketFormat
+{
+    Season6,
+    Season6Extended,
+    Season6Truncated,
+    OpenMU075,
+    OpenMU095,
+    Unknown,
+};
+
+struct CharacterListPacketLayout
+{
+    CharacterListPacketFormat Format = CharacterListPacketFormat::Unknown;
+    int HeaderSize = 0;
+    int EntrySize = 0;
+    int DeclaredCount = 0;
+    int EntryCount = 0;
+    int AvailableEntries = 0;
+    int TrailingBytes = 0;
+    BYTE MaxClass = 0;
+    BYTE IsVaultExtended = 0;
+};
+
+static const wchar_t* GetCharacterListPacketFormatName(CharacterListPacketFormat format)
+{
+    switch (format)
+    {
+    case CharacterListPacketFormat::Season6:
+        return L"Season6";
+    case CharacterListPacketFormat::Season6Extended:
+        return L"Season6Extended";
+    case CharacterListPacketFormat::Season6Truncated:
+        return L"Season6Truncated";
+    case CharacterListPacketFormat::OpenMU075:
+        return L"OpenMU075";
+    case CharacterListPacketFormat::OpenMU095:
+        return L"OpenMU095";
+    default:
+        return L"Unknown";
+    }
+}
+
+static bool TryBuildCharacterListLayout(
+    std::span<const BYTE> receiveBuffer,
+    CharacterListPacketFormat format,
+    int headerSize,
+    int entrySize,
+    int declaredCount,
+    BYTE maxClass,
+    BYTE isVaultExtended,
+    CharacterListPacketLayout& outLayout)
+{
+    if (headerSize <= 0 || entrySize <= 0 || receiveBuffer.size() < static_cast<size_t>(headerSize))
+    {
+        return false;
+    }
+
+    if (declaredCount < 0 || declaredCount > AccountCharacterList::MaxCharacters)
+    {
+        return false;
+    }
+
+    const int packetSize = static_cast<int>(receiveBuffer.size());
+    const int expectedSize = headerSize + (declaredCount * entrySize);
+    if (expectedSize > packetSize)
+    {
+        return false;
+    }
+
+    const int payloadSize = packetSize - headerSize;
+    const int availableEntries = payloadSize / entrySize;
+    const int trailingBytes = packetSize - expectedSize;
+
+    if (trailingBytes != 0)
+    {
+        return false;
+    }
+
+    outLayout.Format = format;
+    outLayout.HeaderSize = headerSize;
+    outLayout.EntrySize = entrySize;
+    outLayout.DeclaredCount = declaredCount;
+    outLayout.EntryCount = std::min(declaredCount, availableEntries);
+    outLayout.AvailableEntries = availableEntries;
+    outLayout.TrailingBytes = trailingBytes;
+    outLayout.MaxClass = maxClass;
+    outLayout.IsVaultExtended = isVaultExtended;
+    return true;
+}
+
+static CharacterListPacketLayout ResolveCharacterListLayout(std::span<const BYTE> receiveBuffer)
+{
+    CharacterListPacketLayout bestLayout;
+    int bestScore = std::numeric_limits<int>::max();
+
+    const auto consider = [&](CharacterListPacketFormat format, int headerSize, int entrySize, int declaredCount, BYTE maxClass, BYTE isVaultExtended)
+    {
+        CharacterListPacketLayout candidate;
+        if (!TryBuildCharacterListLayout(receiveBuffer, format, headerSize, entrySize, declaredCount, maxClass, isVaultExtended, candidate))
+        {
+            return;
+        }
+
+        int score = candidate.TrailingBytes;
+        if (format == CharacterListPacketFormat::Season6Extended || format == CharacterListPacketFormat::Season6)
+        {
+            score -= 1;
+        }
+
+        if (score < bestScore)
+        {
+            bestScore = score;
+            bestLayout = candidate;
+        }
+    };
+
+    if (receiveBuffer.size() >= sizeof(PHEADER_DEFAULT_CHARACTER_LIST))
+    {
+        auto data = reinterpret_cast<LPPHEADER_DEFAULT_CHARACTER_LIST>(const_cast<BYTE*>(receiveBuffer.data()));
+        const int declaredCount = static_cast<int>(data->CharacterCount);
+        consider(
+            CharacterListPacketFormat::Season6Extended,
+            static_cast<int>(sizeof(PHEADER_DEFAULT_CHARACTER_LIST)),
+            static_cast<int>(sizeof(PRECEIVE_CHARACTER_LIST_EXTENDED)),
+            declaredCount,
+            data->MaxClass,
+            data->IsVaultExtended);
+        consider(
+            CharacterListPacketFormat::Season6,
+            static_cast<int>(sizeof(PHEADER_DEFAULT_CHARACTER_LIST)),
+            static_cast<int>(sizeof(PRECEIVE_CHARACTER_LIST)),
+            declaredCount,
+            data->MaxClass,
+            data->IsVaultExtended);
+    }
+
+    if (receiveBuffer.size() >= 5)
+    {
+        const int declaredCount = static_cast<int>(receiveBuffer[4]);
+        consider(
+            CharacterListPacketFormat::OpenMU095,
+            5,
+            static_cast<int>(sizeof(PRECEIVE_CHARACTER_LIST_095)),
+            declaredCount,
+            0,
+            0);
+        consider(
+            CharacterListPacketFormat::OpenMU075,
+            5,
+            static_cast<int>(sizeof(PRECEIVE_CHARACTER_LIST_075)),
+            declaredCount,
+            0,
+            0);
+    }
+
+    return bestLayout;
+}
+
+static CharacterListPacketLayout ResolveFallbackCharacterListLayout(std::span<const BYTE> receiveBuffer)
+{
+    CharacterListPacketLayout layout;
+    if (receiveBuffer.size() < sizeof(PHEADER_DEFAULT_CHARACTER_LIST))
+    {
+        return layout;
+    }
+
+    auto data = reinterpret_cast<LPPHEADER_DEFAULT_CHARACTER_LIST>(const_cast<BYTE*>(receiveBuffer.data()));
+    const int declaredCount = std::clamp(static_cast<int>(data->CharacterCount), 0, AccountCharacterList::MaxCharacters);
+    const int payloadSize = static_cast<int>(receiveBuffer.size() - sizeof(PHEADER_DEFAULT_CHARACTER_LIST));
+    const int availableEntries = payloadSize / static_cast<int>(sizeof(PRECEIVE_CHARACTER_LIST));
+    const int trailingBytes = payloadSize - (availableEntries * static_cast<int>(sizeof(PRECEIVE_CHARACTER_LIST)));
+    if (availableEntries <= 0 || availableEntries < declaredCount || trailingBytes != 0)
+    {
+        g_ErrorReport.Write(
+            L"[ReceiveList] rejected truncated classic packet size=%d count=%d available=%d trailing=%d\r\n",
+            static_cast<int>(receiveBuffer.size()),
+            declaredCount,
+            availableEntries,
+            trailingBytes);
+        return layout;
+    }
+
+    layout.Format = CharacterListPacketFormat::Season6Truncated;
+    layout.HeaderSize = static_cast<int>(sizeof(PHEADER_DEFAULT_CHARACTER_LIST));
+    layout.EntrySize = static_cast<int>(sizeof(PRECEIVE_CHARACTER_LIST));
+    layout.DeclaredCount = declaredCount;
+    layout.AvailableEntries = availableEntries;
+    layout.EntryCount = std::min(layout.DeclaredCount, layout.AvailableEntries);
+    layout.TrailingBytes = trailingBytes;
+    layout.MaxClass = data->MaxClass;
+    layout.IsVaultExtended = data->IsVaultExtended;
+    return layout;
+}
+
+static void CopyFixedCharacterName(wchar_t* destination, const char* source, int sourceLength)
+{
+    char fixedName[MAX_USERNAME_SIZE + 1]{};
+    if (source != nullptr && sourceLength > 0)
+    {
+        std::memcpy(fixedName, source, std::min(sourceLength, MAX_USERNAME_SIZE));
+    }
+
+    CMultiLanguage::ConvertFromUtf8(destination, fixedName, MAX_USERNAME_SIZE);
+    destination[MAX_USERNAME_SIZE] = L'\0';
+}
+
+static void WriteCharacterListPacketTrace(std::span<const BYTE> receiveBuffer, const CharacterListPacketLayout& layout)
+{
+    g_ErrorReport.Write(
+        L"[ReceiveList Format %ls(%d) Size %d Count %d Entries %d Available %d Header %d EntrySize %d Trailing %d MaxClass %d Vault %d]\r\n",
+        GetCharacterListPacketFormatName(layout.Format),
+        static_cast<int>(layout.Format),
+        static_cast<int>(receiveBuffer.size()),
+        layout.DeclaredCount,
+        layout.EntryCount,
+        layout.AvailableEntries,
+        layout.HeaderSize,
+        layout.EntrySize,
+        layout.TrailingBytes,
+        layout.MaxClass,
+        layout.IsVaultExtended);
+}
 
 static uint64_t GetNormalLowerBound(const WORD level)
 {
@@ -495,18 +918,34 @@ void ReceiveServerList(const BYTE* ReceiveBuffer)
         Offset += sizeof(PRECEIVE_SERVER_LIST);
     }
 
-    CUIMng& rUIMng = CUIMng::Instance();
-    if (!rUIMng.m_CreditWin.IsShow())
-    {
-        rUIMng.ShowWin(&rUIMng.m_ServerSelWin);
-        rUIMng.m_ServerSelWin.UpdateDisplay();
-        rUIMng.ShowWin(&rUIMng.m_LoginMainWin);
-    }
+    // Network callbacks can overlap the resize-driven recreation of the legacy
+    // UI list. Apply this on the next login-scene frame, after that rebuild.
+    g_ServerListUiRefreshPending.store(true, std::memory_order_release);
 
     g_ErrorReport.Write(L"Success Receive Server List.\r\n");
 
     g_ConsoleDebug->Write(MCD_RECEIVE, L"0xF4 [ReceiveServerList]");
 }
+
+void ApplyPendingServerListUi()
+{
+    if (!g_ServerListUiRefreshPending.exchange(false, std::memory_order_acq_rel))
+    {
+        return;
+    }
+
+    CUIMng& rUIMng = CUIMng::Instance();
+    if (rUIMng.m_CreditWin.IsShow())
+    {
+        return;
+    }
+
+    rUIMng.EnsureLoginSceneWindowsRegistered();
+    rUIMng.ShowWin(&rUIMng.m_ServerSelWin);
+    rUIMng.m_ServerSelWin.UpdateDisplay();
+    rUIMng.ShowWin(&rUIMng.m_LoginMainWin);
+}
+
 void ReceiveServerConnect(const BYTE* ReceiveBuffer)
 {
     auto Data = (LPPRECEIVE_SERVER_ADDRESS)ReceiveBuffer;
@@ -587,6 +1026,7 @@ void ReceiveJoinServer(const BYTE* ReceiveBuffer)
     }
 
     g_GuildCache.Reset();
+    GuildProfileClient::Reset();
 
 //#if defined _DEBUG || defined FOR_WORK
 //    if (Data2->Result == 0x01)
@@ -665,54 +1105,220 @@ void ReceiveChangePassword(const BYTE* ReceiveBuffer)
     }
 }
 
-void ReceiveCharacterListExtended(const BYTE* ReceiveBuffer)
+void ReceiveCharacterListExtended(std::span<const BYTE> ReceiveBuffer)
 {
     InitGuildWar();
+    const int responsePageIndex = ConsumeExpectedCharacterListResponsePage();
+    // Keep account slots stable during page refreshes. OpenMU currently returns
+    // compacted character pages after deletion; clearing the whole received
+    // page here makes the client forget old slots and lets characters slide
+    // between pages. The initial login path clears the full cache explicitly,
+    // and successful deletion removes only the selected slot.
+    g_ErrorReport.Write(
+        L"[ReceiveList] entered size=%d responsePage=%d\r\n",
+        static_cast<int>(ReceiveBuffer.size()),
+        responsePageIndex + 1);
 
-    auto Data = (LPPHEADER_DEFAULT_CHARACTER_LIST)ReceiveBuffer;
-
-    int Offset = sizeof(PHEADER_DEFAULT_CHARACTER_LIST);
-
-#ifdef _DEBUG
-    g_ConsoleDebug->Write(MCD_RECEIVE, L"[ReceiveList Count %d Max class %d]", Data->CharacterCount, Data->MaxClass);
-#else
-    g_ErrorReport.Write(L"[ReceiveList Count %d Max class %d]", Data->CharacterCount, Data->MaxClass);
-#endif
-
-    CharacterAttribute->IsVaultExtended = Data->IsVaultExtended;
-    for (int i = 0; i < Data->CharacterCount; i++)
+    if (ReceiveBuffer.size() < 5)
     {
-        auto Data2 = (LPPRECEIVE_CHARACTER_LIST_EXTENDED)(ReceiveBuffer + Offset);
-
-        auto iClass = gCharacterManager.ChangeServerClassTypeToClientClassType(Data2->Class);
-        float fPos[2], fAngle = 0.0f;
-
-        switch (Data2->Index)
-        {
-            case 0:	fPos[0] = 8008.0f;	fPos[1] = 18885.0f;	fAngle = 115.0f; break;
-            case 1:	fPos[0] = 7986.0f;	fPos[1] = 19145.0f;	fAngle = 90.0f; break;
-            case 2:	fPos[0] = 8046.0f;	fPos[1] = 19400.0f;	fAngle = 75.0f; break;
-            case 3:	fPos[0] = 8133.0f;	fPos[1] = 19645.0f;	fAngle = 60.0f; break;
-            case 4:	fPos[0] = 8282.0f;	fPos[1] = 19845.0f;	fAngle = 35.0f; break;
-            default: return;
-        }
-
-        CHARACTER* c = CreateHero(Data2->Index, iClass, 0, fPos[0], fPos[1], fAngle);
-
-        c->Level = Data2->Level;
-        c->CtlCode = Data2->CtlCode;
-
-        memset(c->ID, 0, sizeof(c->ID));
-
-        CMultiLanguage::ConvertFromUtf8(c->ID, Data2->ID, MAX_USERNAME_SIZE);
-
-        ReadEquipmentExtended(Data2->Index, Data2->Flags, Data2->Equipment);
-
-        c->GuildStatus = Data2->byGuildStatus;
-        Offset += sizeof(PRECEIVE_CHARACTER_LIST_EXTENDED);
+        g_ErrorReport.Write(
+            L"[ReceiveList] dropped short packet size=%d expectedHeader=5\r\n",
+            static_cast<int>(ReceiveBuffer.size()),
+            5);
+        return;
     }
 
+    CharacterListPacketLayout layout = ResolveCharacterListLayout(ReceiveBuffer);
+    if (layout.Format == CharacterListPacketFormat::Unknown)
+    {
+        layout = ResolveFallbackCharacterListLayout(ReceiveBuffer);
+    }
+
+    WriteCharacterListPacketTrace(ReceiveBuffer, layout);
+
+    if (layout.Format == CharacterListPacketFormat::Unknown)
+    {
+        g_ErrorReport.Write(L"[ReceiveList] invalid packet ignored; character scene will not be initialized.\r\n");
+        CurrentProtocolState = REQUEST_CHARACTERS_LIST;
+        return;
+    }
+
+    CharacterAttribute->IsVaultExtended = layout.IsVaultExtended;
+    for (int i = 0; i < layout.EntryCount; i++)
+    {
+        const int Offset = layout.HeaderSize + (i * layout.EntrySize);
+        CLASS_TYPE iClass = CLASS_WIZARD;
+        int accountSlot = -1;
+        WORD level = 0;
+        BYTE ctlCode = 0;
+        BYTE flags = 0;
+        const BYTE* equipment = nullptr;
+        int equipmentLength = 0;
+        bool usesExtendedEquipment = false;
+        BYTE guildStatus = G_NONE;
+        wchar_t accountCharacterName[MAX_USERNAME_SIZE + 1]{};
+
+        if (layout.Format == CharacterListPacketFormat::Season6Extended)
+        {
+            auto Data2 = reinterpret_cast<LPPRECEIVE_CHARACTER_LIST_EXTENDED>(const_cast<BYTE*>(ReceiveBuffer.data() + Offset));
+            iClass = gCharacterManager.ChangeServerClassTypeToClientClassType(Data2->Class);
+            CopyFixedCharacterName(accountCharacterName, Data2->ID, MAX_USERNAME_SIZE);
+            accountSlot = ResolveAccountCharacterSlot(Data2->Index, accountCharacterName);
+            level = Data2->Level;
+            ctlCode = Data2->CtlCode;
+            flags = Data2->Flags;
+            equipment = Data2->Equipment;
+            equipmentLength = AccountCharacterList::EquipmentLength;
+            usesExtendedEquipment = true;
+            guildStatus = Data2->byGuildStatus;
+        }
+        else if (layout.Format == CharacterListPacketFormat::Season6 || layout.Format == CharacterListPacketFormat::Season6Truncated)
+        {
+            auto Data2 = reinterpret_cast<LPPRECEIVE_CHARACTER_LIST>(const_cast<BYTE*>(ReceiveBuffer.data() + Offset));
+            auto serverClass = static_cast<SERVER_CLASS_TYPE>(Data2->Equipment[0] >> 3);
+            iClass = gCharacterManager.ChangeServerClassTypeToClientClassType(serverClass);
+            CopyFixedCharacterName(accountCharacterName, Data2->ID, MAX_USERNAME_SIZE);
+            accountSlot = ResolveAccountCharacterSlot(Data2->Index, accountCharacterName);
+            level = Data2->Level;
+            ctlCode = Data2->CtlCode;
+            if (layout.Format == CharacterListPacketFormat::Season6Truncated)
+            {
+                equipment = nullptr;
+                equipmentLength = 0;
+                usesExtendedEquipment = true;
+            }
+            else
+            {
+                equipment = Data2->Equipment;
+                equipmentLength = AccountCharacterList::LegacyAppearanceLength;
+                usesExtendedEquipment = false;
+            }
+            guildStatus = Data2->byGuildStatus;
+        }
+        else if (layout.Format == CharacterListPacketFormat::OpenMU095)
+        {
+            auto Data2 = reinterpret_cast<LPPRECEIVE_CHARACTER_LIST_095>(const_cast<BYTE*>(ReceiveBuffer.data() + Offset));
+            auto serverClass = static_cast<SERVER_CLASS_TYPE>(Data2->Equipment[0] >> 3);
+            iClass = gCharacterManager.ChangeServerClassTypeToClientClassType(serverClass);
+            CopyFixedCharacterName(accountCharacterName, Data2->ID, MAX_USERNAME_SIZE);
+            accountSlot = ResolveAccountCharacterSlot(Data2->Index, accountCharacterName);
+            level = Data2->Level;
+            ctlCode = Data2->CtlCode;
+            equipment = nullptr;
+            equipmentLength = 0;
+            usesExtendedEquipment = true;
+        }
+        else if (layout.Format == CharacterListPacketFormat::OpenMU075)
+        {
+            auto Data2 = reinterpret_cast<LPPRECEIVE_CHARACTER_LIST_075>(const_cast<BYTE*>(ReceiveBuffer.data() + Offset));
+            auto serverClass = static_cast<SERVER_CLASS_TYPE>(Data2->Equipment[0] >> 3);
+            iClass = gCharacterManager.ChangeServerClassTypeToClientClassType(serverClass);
+            CopyFixedCharacterName(accountCharacterName, Data2->ID, MAX_USERNAME_SIZE);
+            accountSlot = ResolveAccountCharacterSlot(Data2->Index, accountCharacterName);
+            level = static_cast<WORD>((static_cast<WORD>(Data2->LevelH) << 8) | Data2->LevelL);
+            ctlCode = Data2->CtlCode;
+            equipment = nullptr;
+            equipmentLength = 0;
+            usesExtendedEquipment = true;
+        }
+
+        accountCharacterName[MAX_USERNAME_SIZE] = L'\0';
+
+        if (accountSlot < 0 || accountSlot >= AccountCharacterList::MaxCharacters)
+        {
+            continue;
+        }
+
+        AccountCharacterList::Upsert(
+            accountSlot,
+            iClass,
+            level,
+            ctlCode,
+            flags,
+            equipment,
+            equipmentLength,
+            usesExtendedEquipment,
+            guildStatus,
+            accountCharacterName);
+
+        g_ErrorReport.Write(
+            L"[ReceiveList Entry %d Slot %d Class %d Level %d]\r\n",
+            i,
+            accountSlot,
+            static_cast<int>(iClass),
+            static_cast<int>(level));
+    }
+
+    AccountCharacterPaging::ClampCurrentPage();
+    if (InitCharacterScene)
+    {
+        AccountCharacterPaging::RefreshVisibleCharacters();
+    }
+    CUIMng::Instance().m_CharInfoBalloonMng.UpdateDisplay();
+    g_ErrorReport.Write(
+        L"[CharacterPaging] applied server page response responsePage=%d currentPage=%d count=%d\r\n",
+        responsePageIndex + 1,
+        AccountCharacterPaging::GetCurrentPage() + 1,
+        AccountCharacterList::GetCount());
+
     CurrentProtocolState = RECEIVE_CHARACTERS_LIST;
+}
+
+void ReceiveCharacterPowerScores(std::span<const BYTE> receiveBuffer)
+{
+    constexpr std::size_t HeaderSize = 5;
+    constexpr std::size_t EntrySize = 9;
+
+    if (receiveBuffer.size() < HeaderSize)
+    {
+        return;
+    }
+
+    const std::size_t entryCount = std::min<std::size_t>(
+        receiveBuffer[4],
+        AccountCharacterList::MaxCharacters);
+    if (receiveBuffer.size() < HeaderSize + (entryCount * EntrySize))
+    {
+        g_ErrorReport.Write(
+            L"[CharacterPower] dropped short packet size=%d entries=%d\r\n",
+            static_cast<int>(receiveBuffer.size()),
+            static_cast<int>(entryCount));
+        return;
+    }
+
+    for (std::size_t index = 0; index < entryCount; ++index)
+    {
+        const std::size_t offset = HeaderSize + (index * EntrySize);
+        const int slot = receiveBuffer[offset];
+        std::uint64_t powerScore = 0;
+        std::memcpy(&powerScore, receiveBuffer.data() + offset + 1, sizeof(powerScore));
+        AccountCharacterList::SetPowerScore(slot, powerScore);
+    }
+
+    CUIMng::Instance().m_CharSelMainWin.UpdateDisplay();
+}
+
+void ReceiveCharacterReorderResponse(std::span<const BYTE> receiveBuffer)
+{
+    constexpr std::size_t PacketSize = 7;
+    if (receiveBuffer.size() < PacketSize)
+    {
+        g_ErrorReport.Write(
+            L"[CharacterReorder] dropped short response size=%d expected=%d\r\n",
+            static_cast<int>(receiveBuffer.size()),
+            static_cast<int>(PacketSize));
+        return;
+    }
+
+    const bool success = receiveBuffer[4] != 0;
+    const int sourceSlot = receiveBuffer[5];
+    const int targetSlot = receiveBuffer[6];
+    g_ErrorReport.Write(
+        L"[CharacterReorder] received response success=%d source=%d target=%d\r\n",
+        success ? 1 : 0,
+        sourceSlot,
+        targetSlot);
+    CUIMng::Instance().m_CharSelMainWin.OnCharacterReorderResponse(success, sourceSlot, targetSlot);
 }
 
 CHARACTER_ENABLE g_CharCardEnable;
@@ -739,33 +1345,41 @@ void ReceiveCharacterCard_New(const BYTE* ReceiveBuffer)
 void ReceiveCreateCharacter(const BYTE* ReceiveBuffer)
 {
     auto Data = (LPPRECEIVE_CREATE_CHARACTER)ReceiveBuffer;
+    const int pendingSlot = AccountCharacterList::ConsumePendingCreationSlot();
+    g_ErrorReport.Write(
+        L"[ReceiveCreateCharacter] result=%d index=%d pendingSlot=%d currentPage=%d\r\n",
+        Data->Result,
+        Data->Index,
+        pendingSlot,
+        AccountCharacterPaging::GetCurrentPage() + 1);
+
     if (Data->Result == 1)
     {
-        float fPos[2] = { 0.0f,0.0f }, fAngle = 0.0f;
-
-        switch (Data->Index)
+        int targetSlot = Data->Index;
+        if (pendingSlot >= 0
+            && pendingSlot < AccountCharacterList::MaxCharacters
+            && (targetSlot < 0
+                || targetSlot >= AccountCharacterList::MaxCharacters
+                || (targetSlot < AccountCharacterList::NativeVisibleSlots
+                    && !AccountCharacterPaging::IsSlotOnCurrentPage(targetSlot))))
         {
-            case 0:	fPos[0] = 8008.0f;	fPos[1] = 18885.0f;	fAngle = 115.0f; break;
-            case 1:	fPos[0] = 7986.0f;	fPos[1] = 19145.0f;	fAngle = 90.0f; break;
-            case 2:	fPos[0] = 8046.0f;	fPos[1] = 19400.0f;	fAngle = 75.0f; break;
-            case 3:	fPos[0] = 8133.0f;	fPos[1] = 19645.0f;	fAngle = 60.0f; break;
-            case 4:	fPos[0] = 8282.0f;	fPos[1] = 19845.0f;	fAngle = 35.0f; break;
+            targetSlot = pendingSlot;
         }
 
-        INT		iCharacterKey;
-        iCharacterKey = Data->Index;
-        DeleteCharacter(iCharacterKey);
+        if (targetSlot < 0 || targetSlot >= AccountCharacterList::MaxCharacters)
+        {
+            targetSlot = AccountCharacterList::FindFirstEmptySlot();
+        }
 
-        CreateHero(Data->Index, CharacterView.Class, CharacterView.Skin, fPos[0], fPos[1], fAngle);
-        CharactersClient[Data->Index].Level = Data->Level;
-        auto serverClass = (SERVER_CLASS_TYPE)(Data->Class >> 3);
-        auto iClass = gCharacterManager.ChangeServerClassTypeToClientClassType(serverClass);
+        if (targetSlot < 0 || targetSlot >= AccountCharacterList::MaxCharacters)
+        {
+            CUIMng::Instance().PopUpMsgWin(RECEIVE_CREATE_CHARACTER_FAIL2);
+            return;
+        }
 
-        CharactersClient[Data->Index].Class = iClass;
-        CharactersClient[Data->Index].SkinIndex = gCharacterManager.GetSkinModelIndex(iClass);
-        CMultiLanguage::ConvertFromUtf8(CharactersClient[Data->Index].ID, Data->ID, MAX_USERNAME_SIZE);
-        CharactersClient[Data->Index].ID[MAX_USERNAME_SIZE] = L'\0';
-        CurrentProtocolState = RECEIVE_CREATE_CHARACTER_SUCCESS;
+        AccountCharacterPaging::SetPageForSlot(targetSlot);
+
+        CurrentProtocolState = REQUEST_CHARACTERS_LIST;
         CUIMng& rUIMng = CUIMng::Instance();
         rUIMng.CloseMsgWin();
         rUIMng.m_CharSelMainWin.UpdateDisplay();
@@ -775,6 +1389,8 @@ void ReceiveCreateCharacter(const BYTE* ReceiveBuffer)
         CUIMng::Instance().PopUpMsgWin(RECEIVE_CREATE_CHARACTER_FAIL);
     else if (Data->Result == 2)
         CUIMng::Instance().PopUpMsgWin(RECEIVE_CREATE_CHARACTER_FAIL2);
+    else if (Data->Result == 3)
+        CUIMng::Instance().PopUpMsgWin(RECEIVE_CREATE_CHARACTER_EXCLUSIVE_NAME);
 
     g_ConsoleDebug->Write(MCD_RECEIVE, L"0x01 [ReceiveCreateCharacter]");
 }
@@ -785,9 +1401,18 @@ void ReceiveDeleteCharacter(const BYTE* ReceiveBuffer)
     switch (Data->Value)
     {
     case 1:
-        INT		iKey;
-        iKey = CharactersClient[SelectedHero].Key;
-        DeleteCharacter(iKey);
+        if (SelectedHero >= 0 && SelectedHero < AccountCharacterList::NativeVisibleSlots)
+        {
+            INT iKey = CharactersClient[SelectedHero].Key;
+            const int accountSlot = AccountCharacterPaging::GetVisibleSlot(SelectedHero);
+            AccountCharacterList::Remove(accountSlot);
+            DeleteCharacter(iKey);
+            SelectedHero = -1;
+            AccountCharacterPaging::ClampCurrentPage();
+            AccountCharacterPaging::RefreshVisibleCharacters();
+            CUIMng::Instance().m_CharSelMainWin.UpdateDisplay();
+            CUIMng::Instance().m_CharInfoBalloonMng.UpdateDisplay();
+        }
         CUIMng::Instance().PopUpMsgWin(MESSAGE_DELETE_CHARACTER_SUCCESS);
         break;
     case 0:
@@ -895,6 +1520,7 @@ BOOL ReceiveLogOut(const BYTE* ReceiveBuffer, BOOL bEncrypted)
     {
     case 0:
         g_GuildCache.Reset();
+        GuildProfileClient::Reset();
         memset(GuildMark[MARK_EDIT].Mark, 0, sizeof(GuildMark[MARK_EDIT].Mark));
         memset(GuildMark[MARK_EDIT].GuildName, 0, sizeof(GuildMark[MARK_EDIT].GuildName));
         SelectMarkColor = 0;
@@ -906,12 +1532,13 @@ BOOL ReceiveLogOut(const BYTE* ReceiveBuffer, BOOL bEncrypted)
 
         SEASON3B::CNewUIInventoryCtrl::BackupPickedItem();
 
+        AccountCompanionClient::ResetLocalState();
         ReleaseMainData();
         CryWolfMVPInit();
 
         SceneFlag = CHARACTER_SCENE;
         CurrentProtocolState = REQUEST_CHARACTERS_LIST;
-        SocketClient->ToGameServer()->SendRequestCharacterList(g_pMultiLanguage->GetLanguage());
+        SendInitialCharacterListRequest();
 
         g_sceneInit.ResetForDisconnect();
         CurrentProtocolState = REQUEST_JOIN_SERVER;
@@ -924,10 +1551,12 @@ BOOL ReceiveLogOut(const BYTE* ReceiveBuffer, BOOL bEncrypted)
             StopMusic();
             AllStopSound();
             SEASON3B::CNewUIInventoryCtrl::BackupPickedItem();
+            AccountCompanionClient::ResetLocalState();
             ReleaseMainData();
         }
 
         g_GuildCache.Reset();
+        GuildProfileClient::Reset();
         memset(GuildMark[MARK_EDIT].Mark, 0, sizeof(GuildMark[MARK_EDIT].Mark));
         memset(GuildMark[MARK_EDIT].GuildName, 0, sizeof(GuildMark[MARK_EDIT].GuildName));
         SelectMarkColor = 0;
@@ -968,9 +1597,11 @@ void ResetClientToLoginScene()
     StopMusic();
     AllStopSound();
     SEASON3B::CNewUIInventoryCtrl::BackupPickedItem();
+    AccountCompanionClient::ResetLocalState();
     ReleaseMainData();
 
     g_GuildCache.Reset();
+    GuildProfileClient::Reset();
     memset(GuildMark[MARK_EDIT].Mark, 0, sizeof(GuildMark[MARK_EDIT].Mark));
     memset(GuildMark[MARK_EDIT].GuildName, 0, sizeof(GuildMark[MARK_EDIT].GuildName));
     SelectMarkColor = 0;
@@ -1083,6 +1714,7 @@ BOOL ReceiveJoinMapServer(std::span<const BYTE> ReceiveBuffer)
     c->CtlCode = Data->CtlCode;
 
     o->Kind = KIND_PLAYER;
+    ResetCharacterMachineEquipment();
     SetCharacterClass(c);
 
     Hero = c;
@@ -1090,13 +1722,6 @@ BOOL ReceiveJoinMapServer(std::span<const BYTE> ReceiveBuffer)
     memset(c->ID, 0, sizeof c->ID);
     wcscpy(c->ID, CharacterAttribute->Name);
 
-    for (auto & i : CharacterMachine->Equipment)
-    {
-        i.Type = -1;
-        i.Level = 0;
-        i.ExcellentFlags = 0;
-    }
-    
     CreateEffect(BITMAP_MAGIC + 2, o->Position, o->Angle, o->Light, 0, o);
     CurrentProtocolState = RECEIVE_JOIN_MAP_SERVER;
 
@@ -1511,10 +2136,16 @@ void ReceiveMuHelperStatusUpdate(std::span<const BYTE> ReceiveBuffer)
 
     if (pMuHelperStatus->Pause)
     {
-        MUHelper::g_MuHelper.Stop();
+        MUHelper::g_MuHelper.ResetSessionState(false);
     }
     else
     {
+        if (!MUHelper::g_MuHelper.ShouldAcceptServerStart())
+        {
+            MUHelper::g_MuHelper.ResetSessionState(true);
+            return;
+        }
+
         MUHelper::g_MuHelper.Start();
 
         if (pMuHelperStatus->Money > 0 && pMuHelperStatus->ConsumeMoney)
@@ -1566,32 +2197,63 @@ void ReceiveDeleteInventory(const BYTE* ReceiveBuffer)
 int CalcItemLength(std::span<const BYTE> ReceiveBuffer)
 {
     auto Data = safe_cast<PITEM_EXTENDED_BASE>(ReceiveBuffer);
+    if (Data == nullptr)
+    {
+        return 0;
+    }
+
     int size = 5;
     if (Data->OptionFlags & ItemOptionFlags::HasOption)
     {
+        if (ReceiveBuffer.size() <= static_cast<size_t>(size))
+        {
+            return size;
+        }
+
         size++;
     }
 
     if (Data->OptionFlags & ItemOptionFlags::HasExcellent)
     {
+        if (ReceiveBuffer.size() <= static_cast<size_t>(size))
+        {
+            return size;
+        }
+
         size++;
     }
 
     if (Data->OptionFlags & ItemOptionFlags::HasAncient)
     {
+        if (ReceiveBuffer.size() <= static_cast<size_t>(size))
+        {
+            return size;
+        }
+
         size++;
     }
 
     if (Data->OptionFlags & ItemOptionFlags::HasHarmony)
     {
+        if (ReceiveBuffer.size() <= static_cast<size_t>(size))
+        {
+            return size;
+        }
+
         size++;
     }
 
     if (Data->OptionFlags & ItemOptionFlags::HasSockets)
     {
+        if (ReceiveBuffer.size() <= static_cast<size_t>(size))
+        {
+            return size;
+        }
+
         auto socketCount = ReceiveBuffer[size] & 0xF;
+        socketCount = std::min<int>(socketCount, MAX_SOCKETS);
         size++;
-        size += socketCount;
+        size += std::min<int>(socketCount, static_cast<int>(ReceiveBuffer.size()) - size);
     }
 
     return size;
@@ -1599,14 +2261,9 @@ int CalcItemLength(std::span<const BYTE> ReceiveBuffer)
 
 BOOL ReceiveInventoryExtended(std::span<const BYTE> ReceiveBuffer)
 {
-    for (auto & i : CharacterMachine->Equipment)
-    {
-        i.Type = -1;
-        i.Number = 0;
-        i.ExcellentFlags = 0;
-    }
+    ItemEvolutionClient::Reset();
 
-    g_pMyInventory->UnequipAllItems();
+    ResetCharacterMachineEquipment();
     g_pMyInventory->DeleteAllItems();
     g_pMyInventoryExt->DeleteAllItems();
     g_pMyShopInventory->DeleteAllItems();
@@ -1639,6 +2296,11 @@ BOOL ReceiveInventoryExtended(std::span<const BYTE> ReceiveBuffer)
 
         auto itemData = ReceiveBuffer.subspan(Offset);
         int length = CalcItemLength(itemData);
+        if (length <= 0)
+        {
+            return false;
+        }
+
         itemData = itemData.subspan(0, length);
 
         if (itemindex >= 0 && itemindex < MAX_EQUIPMENT_INDEX)
@@ -1768,10 +2430,74 @@ void ReceiveChat(const BYTE* ReceiveBuffer)
         CMultiLanguage::ConvertFromUtf8(ID, Data->ID, MAX_USERNAME_SIZE);
         ID[MAX_USERNAME_SIZE] = L'\0';
 
-        const auto messageSize = Data->Header.Size - MAX_USERNAME_SIZE - sizeof(PBMSG_HEADER);
+        const int packetTextSize = static_cast<int>(Data->Header.Size) - MAX_USERNAME_SIZE - static_cast<int>(sizeof(PBMSG_HEADER));
+        const int messageSize = std::clamp(packetTextSize, 0, MAX_CHAT_SIZE);
         wchar_t Text[MAX_CHAT_SIZE + 1] {};
-        CMultiLanguage::ConvertFromUtf8(Text, Data->ChatText);
+        CMultiLanguage::ConvertFromUtf8(Text, Data->ChatText, messageSize);
         Text[MAX_CHAT_SIZE] = L'\0';
+
+        if (std::wcsncmp(Text, L"#GPS1|", 6) == 0)
+        {
+            wchar_t* end = nullptr;
+            const unsigned long flags = std::wcstoul(Text + 6, &end, 10);
+            if (end != Text + 6)
+            {
+                GameConfig& config = GameConfig::GetInstance();
+                config.SetGamePerformanceFlags(static_cast<unsigned int>(flags));
+                config.Save();
+
+                if (g_pOption != nullptr)
+                {
+                    g_pOption->SetRenderAllEffects(!config.GetDisableHeavyEffects());
+                    g_pOption->SetRenderLevel(config.GetReduceCharacterGlow() ? 0 : 4);
+                }
+
+                if (config.GetHideMountsPets())
+                {
+                    for (int i = 0; i < MAX_CHARACTERS_CLIENT; ++i)
+                    {
+                        DeleteMount(&CharactersClient[i].Object);
+                    }
+                }
+            }
+
+            return;
+        }
+
+        if (AccountCompanionClient::HandleVisualPublicMessage(ID, Text))
+        {
+            return;
+        }
+
+        if (AccountCompanionClient::HandlePlanMessage(Text))
+        {
+            return;
+        }
+
+        if (ItemEvolutionClient::HandleEvolutionMessage(Text))
+        {
+            return;
+        }
+
+        if (KillNotificationClient::HandleKillMessage(Text))
+        {
+            return;
+        }
+
+        if (GuildProfileClient::HandleProfileMessage(Text))
+        {
+            return;
+        }
+
+        if (AzothClient::HandleBalanceMessage(ID, Text))
+        {
+            return;
+        }
+
+        if (JewelBankClient::HandleBankMessage(ID, Text))
+        {
+            return;
+        }
 
         if (Text[0] == L'~')
         {
@@ -1870,10 +2596,11 @@ void ReceiveChatWhisper(const BYTE* ReceiveBuffer)
     CMultiLanguage::ConvertFromUtf8(ID, Data->ID, MAX_USERNAME_SIZE);
     ID[MAX_USERNAME_SIZE] = L'\0';
 
-    const auto messageSize = Data->Header.Size - MAX_USERNAME_SIZE - sizeof(PBMSG_HEADER);
+    const int packetTextSize = static_cast<int>(Data->Header.Size) - MAX_USERNAME_SIZE - static_cast<int>(sizeof(PBMSG_HEADER));
+    const int messageSize = std::clamp(packetTextSize, 0, MAX_CHAT_SIZE);
     wchar_t Text[MAX_CHAT_SIZE + 1] {};
     CMultiLanguage::ConvertFromUtf8(Text, Data->ChatText, messageSize);
-    Text[messageSize] = L'\0';
+    Text[MAX_CHAT_SIZE] = L'\0';
 
     UI::Chat::Whisper::Register(10, ID);
 
@@ -1901,7 +2628,18 @@ void ReceiveChatKey(const BYTE* ReceiveBuffer)
 {
     auto Data = (LPPCHATING_KEY)ReceiveBuffer;
     int Key = ((int)(Data->KeyH) << 8) + Data->KeyL;
+    wchar_t ChatText[sizeof Data->ChatText + 1] {};
+    CMultiLanguage::ConvertFromUtf8(ChatText, Data->ChatText, sizeof Data->ChatText);
+    if (AccountCompanionClient::HandleVisualLinkMessage(Key, ChatText))
+    {
+        return;
+    }
+
     int Index = FindCharacterIndex(Key);
+    if (Index < 0 || Index >= MAX_CHARACTERS_CLIENT)
+    {
+        return;
+    }
 
     if (Hero->GuildStatus == G_MASTER && wcscmp(CharactersClient[Index].ID, L"길드 마스터") == 0)
     {
@@ -1918,8 +2656,6 @@ void ReceiveChatKey(const BYTE* ReceiveBuffer)
         return;
     }
 
-    wchar_t ChatText[sizeof Data->ChatText + 1] {};
-    CMultiLanguage::ConvertFromUtf8(ChatText, Data->ChatText, sizeof Data->ChatText);
     UI::Chat::CreateChat(CharactersClient[Index].ID, ChatText, &CharactersClient[Index]);
 }
 
@@ -1996,7 +2732,7 @@ void ReceiveMoveCharacter(std::span<const BYTE> ReceiveBuffer)
         return;
     }
 
-    if (IsMonster(c))
+    if (ShouldFeedMuHelperTarget(c))
     {
         MUHelper::g_MuHelper.AddTarget(Key, false);
     }
@@ -2867,7 +3603,7 @@ void ReceiveCreateMonsterViewport(const BYTE* ReceiveBuffer)
         if (c == nullptr) break;
 
         OBJECT* o = &c->Object;
-        if (IsMonster(c))
+        if (ShouldFeedMuHelperTarget(c))
         {
             MUHelper::g_MuHelper.AddTarget(Key, false);
         }
@@ -3426,7 +4162,7 @@ void ReceiveAttackDamageExtended(const BYTE* ReceiveBuffer)
     auto ShieldDamage = Data->ShieldDamage;
 
     g_ConsoleDebug->Write(MCD_RECEIVE, L"0x15 [ReceiveAttackDamageExtended(%d %d)]", AttackPlayer, Damage);
-    if (IsMonster(c))
+    if (ShouldFeedMuHelperTarget(c))
     {
         MUHelper::g_MuHelper.AddTarget(Key, true);
     }
@@ -3508,7 +4244,7 @@ void ReceiveAction(const BYTE* ReceiveBuffer, int Size)
         c->Object.AnimationFrame = 0;
 
         c->TargetCharacter = HeroIndex;
-        if (IsMonster(c))
+        if (ShouldFeedMuHelperTarget(c))
         {
             MUHelper::g_MuHelper.AddTarget(Key, true);
         }
@@ -5888,89 +6624,203 @@ void ReceiveDie(const BYTE* ReceiveBuffer, int Size)
 
 void ReceiveCreateMoney(std::span<const BYTE> ReceiveBuffer)
 {
-    auto Data = safe_cast<PCREATE_MONEY>(ReceiveBuffer);
-    if (Data == nullptr)
+    constexpr int kMoneyDroppedExtendedSize = 12;
+    if (ReceiveBuffer.size() < kMoneyDroppedExtendedSize)
     {
-        assert(false);
+        g_ConsoleDebug->Write(MCD_ERROR, L"0x2F [ReceiveCreateMoney] packet too small: %d", static_cast<int>(ReceiveBuffer.size()));
         return;
     }
-    
-    if (Data->Id < 0 || Data->Id >= MAX_ITEMS)
+
+    const bool isFreshDrop = ReceiveBuffer[3] != 0;
+    const int id = static_cast<int>(ReceiveBuffer[4]) | (static_cast<int>(ReceiveBuffer[5]) << 8);
+    const BYTE positionX = ReceiveBuffer[6];
+    const BYTE positionY = ReceiveBuffer[7];
+    const DWORD amount =
+        static_cast<DWORD>(ReceiveBuffer[8])
+        | (static_cast<DWORD>(ReceiveBuffer[9]) << 8)
+        | (static_cast<DWORD>(ReceiveBuffer[10]) << 16)
+        | (static_cast<DWORD>(ReceiveBuffer[11]) << 24);
+    const int safeAmount = amount > static_cast<DWORD>(std::numeric_limits<int>::max())
+        ? std::numeric_limits<int>::max()
+        : static_cast<int>(amount);
+
+    if (id < 0 || id >= MAX_ITEMS)
     {
         // we don't have a free place for it ...
+        g_ConsoleDebug->Write(MCD_ERROR, L"0x2F [ReceiveCreateMoney] invalid id=%d", id);
         return;
     }
 
     vec3_t Position;
-    Position[0] = (float)(Data->PositionX + 0.5f)* TERRAIN_SCALE;
-    Position[1] = (float)(Data->PositionY + 0.5f) * TERRAIN_SCALE;
+    Position[0] = (float)(positionX + 0.5f) * TERRAIN_SCALE;
+    Position[1] = (float)(positionY + 0.5f) * TERRAIN_SCALE;
 
-    CreateMoneyDrop(&Items[Data->Id], Data->Amount, Position, Data->IsFreshDrop);
-    MUHelper::g_MuHelper.AddItem(Data->Id, { Data->PositionX, Data->PositionY });
+    CreateMoneyDrop(&Items[id], safeAmount, Position, isFreshDrop);
+    MUHelper::g_MuHelper.AddItem(id, { positionX, positionY });
 
-    g_ConsoleDebug->Write(MCD_RECEIVE, L"0x20 [ReceiveCreateMoney]");
+    g_ConsoleDebug->Write(MCD_RECEIVE, L"0x2F [ReceiveCreateMoney]");
 }
 
 void ReceiveCreateItemViewportExtended(std::span<const BYTE> ReceiveBuffer)
 {
-    auto Data = safe_cast<PWHEADER_DEFAULT_WORD>(ReceiveBuffer);
-    if (Data == nullptr)
+    constexpr int kDroppedItemsHeaderSize = 5;
+    constexpr int kDroppedItemHeaderSize = 4;
+    if (ReceiveBuffer.size() < kDroppedItemsHeaderSize)
     {
-        assert(false);
+        g_ConsoleDebug->Write(MCD_ERROR, L"0x20 [ReceiveCreateItemViewport] packet too small: %d", static_cast<int>(ReceiveBuffer.size()));
         return;
     }
 
-    int Offset = sizeof(PWHEADER_DEFAULT_WORD);
-    for (int i = 0; i < Data->Value; i++)
+    const int itemCount = ReceiveBuffer[4];
+    if (itemCount <= 0)
     {
-        auto itemStartData = safe_cast<PCREATE_ITEM_EXTENDED>(ReceiveBuffer.subspan(Offset));
-        if (itemStartData == nullptr)
+        g_ConsoleDebug->Write(MCD_RECEIVE, L"0x20 [ReceiveCreateItemViewport] empty");
+        return;
+    }
+
+    struct ParsedDroppedItem
+    {
+        int Id = -1;
+        bool IsFreshDrop = false;
+        BYTE PositionX = 0;
+        BYTE PositionY = 0;
+        ItemCreationParams Params{};
+    };
+
+    auto rejectPacket = [&](const wchar_t* reason, int itemIndex, size_t offset)
+    {
+        g_ConsoleDebug->Write(
+            MCD_ERROR,
+            L"0x20 [ReceiveCreateItemViewport] rejected: %ls index=%d offset=%d size=%d count=%d",
+            reason,
+            itemIndex,
+            static_cast<int>(offset),
+            static_cast<int>(ReceiveBuffer.size()),
+            itemCount);
+        g_ErrorReport.Write(
+            L"> Dropped item packet rejected: %ls (index=%d, offset=%d, size=%d, count=%d).\r\n",
+            reason,
+            itemIndex,
+            static_cast<int>(offset),
+            static_cast<int>(ReceiveBuffer.size()),
+            itemCount);
+    };
+
+    std::vector<ParsedDroppedItem> parsedItems;
+    parsedItems.reserve(itemCount);
+    size_t offset = kDroppedItemsHeaderSize;
+    for (int i = 0; i < itemCount; i++)
+    {
+        if (ReceiveBuffer.size() - offset < kDroppedItemHeaderSize + PACKET_ITEM_LENGTH_EXTENDED_MIN)
         {
-            assert(false);
+            rejectPacket(L"truncated item block", i, offset);
             return;
         }
 
-        auto id = MAKEWORD(itemStartData->IdH, itemStartData->IdL) & 0x7FFF;
-        auto isFreshDrop = (itemStartData->IdL & 0x80) > 0;
-        if (id < 0 || id >= MAX_ITEMS)
+        const BYTE idHigh = ReceiveBuffer[offset];
+        const BYTE idLow = ReceiveBuffer[offset + 1];
+        const int id = ((static_cast<int>(idHigh) << 8) | static_cast<int>(idLow)) & 0x7FFF;
+        if (id < 0 || id >= MAX_ITEMS
+            || std::any_of(parsedItems.begin(), parsedItems.end(), [id](const ParsedDroppedItem& item) { return item.Id == id; }))
         {
-            // we don't have a free place for it ...
-            continue;
+            rejectPacket(L"invalid or duplicate item id", i, offset);
+            return;
         }
 
-        Offset += 4;
-        auto itemData = ReceiveBuffer.subspan(Offset);
-        int length = CalcItemLength(itemData);
+        ParsedDroppedItem parsedItem;
+        parsedItem.Id = id;
+        parsedItem.IsFreshDrop = (idHigh & 0x80) > 0;
+        parsedItem.PositionX = ReceiveBuffer[offset + 2];
+        parsedItem.PositionY = ReceiveBuffer[offset + 3];
+
+        offset += kDroppedItemHeaderSize;
+        auto itemData = ReceiveBuffer.subspan(offset);
+        const int length = CalcItemLength(itemData);
+        if (length <= 0 || itemData.size() < static_cast<size_t>(length))
+        {
+            rejectPacket(L"invalid item data length", i, offset);
+            return;
+        }
+
         itemData = itemData.subspan(0, length);
+        parsedItem.Params = ParseItemData(itemData);
+        const int itemType = parsedItem.Params.Group * MAX_ITEM_INDEX + parsedItem.Params.Number;
+        if (parsedItem.Params.Group < 0
+            || parsedItem.Params.Group >= MAX_ITEM_TYPE
+            || parsedItem.Params.Number < 0
+            || parsedItem.Params.Number >= MAX_ITEM_INDEX
+            || itemType < 0
+            || itemType >= MAX_ITEM)
+        {
+            rejectPacket(L"invalid item type", i, offset);
+            return;
+        }
 
-        auto params = ParseItemData(itemData);
+        parsedItems.push_back(parsedItem);
+        offset += static_cast<size_t>(length);
+    }
+
+    if (offset != ReceiveBuffer.size())
+    {
+        rejectPacket(L"unexpected trailing data", itemCount, offset);
+        return;
+    }
+
+    for (const auto& parsedItem : parsedItems)
+    {
         vec3_t Position;
-        Position[0] = (float)(itemStartData->PositionX + 0.5f) * TERRAIN_SCALE;
-        Position[1] = (float)(itemStartData->PositionY + 0.5f) * TERRAIN_SCALE;
+        Position[0] = (float)(parsedItem.PositionX + 0.5f) * TERRAIN_SCALE;
+        Position[1] = (float)(parsedItem.PositionY + 0.5f) * TERRAIN_SCALE;
 
-        CreateItemDrop(&Items[id], params, Position, isFreshDrop);
-        MUHelper::g_MuHelper.AddItem(id, { itemStartData->PositionX, itemStartData->PositionY });
-
-        Offset += length;
+        CreateItemDrop(&Items[parsedItem.Id], parsedItem.Params, Position, parsedItem.IsFreshDrop);
+        if (Items[parsedItem.Id].Object.Live)
+        {
+            MUHelper::g_MuHelper.AddItem(parsedItem.Id, { parsedItem.PositionX, parsedItem.PositionY });
+        }
     }
 
     g_ConsoleDebug->Write(MCD_RECEIVE, L"0x20 [ReceiveCreateItemViewport]");
 }
 
-void ReceiveDeleteItemViewport(const BYTE* ReceiveBuffer)
+void ReceiveDeleteItemViewport(std::span<const BYTE> ReceiveBuffer)
 {
-    auto Data = (LPPWHEADER_DEFAULT_WORD)ReceiveBuffer;
-    int Offset = sizeof(PWHEADER_DEFAULT_WORD);
-    for (int i = 0; i < Data->Value; i++)
+    constexpr int kDroppedItemRemovedHeaderSize = 5;
+    constexpr int kDroppedItemRemovedIdSize = 2;
+    if (ReceiveBuffer.size() < kDroppedItemRemovedHeaderSize)
     {
-        auto Data2 = (LPPDELETE_CHARACTER)(ReceiveBuffer + Offset);
-        int Key = ((int)(Data2->KeyH) << 8) + Data2->KeyL;
-        if (Key < 0 || Key >= MAX_ITEMS)
-            Key = 0;
-        Items[Key].Object.Live = false;
-        Offset += sizeof(PDELETE_CHARACTER);
+        g_ConsoleDebug->Write(MCD_ERROR, L"0x21 [ReceiveDeleteItemViewport] packet too small: %d", static_cast<int>(ReceiveBuffer.size()));
+        return;
+    }
 
-        MUHelper::g_MuHelper.DeleteItem(Key);
+    const int itemCount = ReceiveBuffer[4];
+    int Offset = kDroppedItemRemovedHeaderSize;
+    for (int i = 0; i < itemCount; i++)
+    {
+        if (ReceiveBuffer.size() < static_cast<size_t>(Offset + kDroppedItemRemovedIdSize))
+        {
+            g_ConsoleDebug->Write(
+                MCD_ERROR,
+                L"0x21 [ReceiveDeleteItemViewport] truncated id index=%d offset=%d size=%d count=%d",
+                i,
+                Offset,
+                static_cast<int>(ReceiveBuffer.size()),
+                itemCount);
+            return;
+        }
+
+        int Key = ((int)(ReceiveBuffer[Offset]) << 8) + ReceiveBuffer[Offset + 1];
+        Key &= 0x7FFF;
+        if (Key >= 0 && Key < MAX_ITEMS)
+        {
+            Items[Key].Object.Live = false;
+            MUHelper::g_MuHelper.DeleteItem(Key);
+            if (SendGetItem == Key)
+            {
+                SendGetItem = -1;
+            }
+        }
+
+        Offset += kDroppedItemRemovedIdSize;
     }
 }
 
@@ -7487,11 +8337,23 @@ int  SoccerTime;
 wchar_t SoccerTeamName[2][8 + 1];
 bool SoccerObserver = false;
 
+static bool IsSelectedWarServerForGuildWar()
+{
+    return g_ServerListManager != nullptr && g_ServerListManager->IsSelectedWarServer();
+}
+
 void ReceiveDeclareWar(const BYTE* ReceiveBuffer)
 {
     auto Data = (LPPRECEIVE_WAR)ReceiveBuffer;
     memset(GuildWarName, 0, sizeof GuildWarName);
     CMultiLanguage::ConvertFromUtf8(GuildWarName, Data->Name, 8);
+
+    if (!IsSelectedWarServerForGuildWar())
+    {
+        SocketClient->ToGameServer()->SendGuildWarResponse(false);
+        InitGuildWar();
+        return;
+    }
 
     if (Data->Type == 1)
     {
@@ -7506,6 +8368,12 @@ void ReceiveDeclareWar(const BYTE* ReceiveBuffer)
 void ReceiveDeclareWarResult(const BYTE* ReceiveBuffer)
 {
     auto Data = (LPPHEADER_DEFAULT)ReceiveBuffer;
+    if (!IsSelectedWarServerForGuildWar())
+    {
+        InitGuildWar();
+        return;
+    }
+
     switch (Data->Value)
     {
     case 0:g_pSystemLogBox->AddText(I18N::Game::ThatGuildDoesNotExist, SEASON3B::TYPE_ERROR_MESSAGE); break;
@@ -7525,6 +8393,12 @@ void ReceiveDeclareWarResult(const BYTE* ReceiveBuffer)
 void ReceiveGuildBeginWar(const BYTE* ReceiveBuffer)
 {
     auto Data = (LPPRECEIVE_WAR)ReceiveBuffer;
+    if (!IsSelectedWarServerForGuildWar())
+    {
+        InitGuildWar();
+        return;
+    }
+
     EnableGuildWar = true;
 
     wchar_t Text[100];
@@ -7620,6 +8494,12 @@ void ReceiveGuildEndWar(const BYTE* ReceiveBuffer)
 void ReceiveGuildWarScore(const BYTE* ReceiveBuffer)
 {
     auto Data = (LPPRECEIVE_WAR_SCORE)ReceiveBuffer;
+    if (!IsSelectedWarServerForGuildWar())
+    {
+        InitGuildWar();
+        return;
+    }
+
     EnableGuildWar = true;
 
 #ifdef GUILD_WAR_EVENT
@@ -7909,12 +8789,24 @@ void ReceiveUnionList(const BYTE* ReceiveBuffer)
 void ReceiveSoccerTime(const BYTE* ReceiveBuffer)
 {
     auto Data = (LPPRECEIVE_SOCCER_TIME)ReceiveBuffer;
+    if (!IsSelectedWarServerForGuildWar())
+    {
+        return;
+    }
+
     SoccerTime = Data->Time;
 }
 
 void ReceiveSoccerScore(const BYTE* ReceiveBuffer)
 {
     auto Data = (LPPRECEIVE_SOCCER_SCORE)ReceiveBuffer;
+    if (!IsSelectedWarServerForGuildWar())
+    {
+        SoccerObserver = false;
+        g_pNewUISystem->Hide(SEASON3B::INTERFACE_BATTLE_SOCCER_SCORE);
+        return;
+    }
+
     CMultiLanguage::ConvertFromUtf8(SoccerTeamName[0], Data->Name1, MAX_GUILDNAME);
     CMultiLanguage::ConvertFromUtf8(SoccerTeamName[1], Data->Name2, MAX_GUILDNAME);
     GuildWarScore[0] = Data->Score1;
@@ -7943,6 +8835,11 @@ void ReceiveSoccerScore(const BYTE* ReceiveBuffer)
 void ReceiveSoccerGoal(const BYTE* ReceiveBuffer)
 {
     auto Data = (LPPHEADER_DEFAULT)ReceiveBuffer;
+    if (!IsSelectedWarServerForGuildWar())
+    {
+        return;
+    }
+
     wchar_t Text[100];
     if (Data->Value == HeroSoccerTeam)
         mu_swprintf(Text, I18N::Game::SGuildWinsAPoint, GuildMark[Hero->GuildMarkIndex].GuildName);
@@ -9160,6 +10057,15 @@ void ReceivePersonalShopItemList(std::span<const BYTE> ReceiveBuffer)
         int index = FindCharacterIndex(key);
 
         g_pPurchaseShopInventory->ChangeShopCharacterIndex(index);
+        g_PersonalShopSeller.Key = static_cast<WORD>(key);
+
+        wchar_t sellerName[MAX_USERNAME_SIZE + 1] {};
+        CMultiLanguage::ConvertFromUtf8(sellerName, Header->szId, MAX_USERNAME_SIZE);
+        if (sellerName[0] != L'\0')
+        {
+            wcscpy(g_PersonalShopSeller.ID, sellerName);
+            LaunchPersonalStoreBrowserOverlayForSeller(sellerName);
+        }
     }
     else
     {
@@ -9876,6 +10782,8 @@ void ReceiveOption(const BYTE* ReceiveBuffer)
             }
         }
     }
+
+    g_pMainFrame->LoadSkillHotKeysLocal();
 
     if ((Data->GameOption & AUTOATTACK_ON) == AUTOATTACK_ON)
     {
@@ -11641,6 +12549,14 @@ void ReceivePreviewPort(std::span<const BYTE> ReceiveBuffer)
         case 1:
         {
             CHARACTER* c = CreateCharacter(Key, MODEL_PLAYER, pData2->m_byPosX, pData2->m_byPosY, 0);
+            if (!IsValidClientCharacter(c))
+            {
+                g_ErrorReport.Write(
+                    L"[ReceivePreviewPort] skipped player key=%d because no valid client character slot was available\r\n",
+                    Key);
+                break;
+            }
+
             OBJECT* o = &c->Object;
 
             c->Class = gCharacterManager.ChangeServerClassTypeToClientClassType((SERVER_CLASS_TYPE)pData2->m_byTypeH);
@@ -11662,7 +12578,11 @@ void ReceivePreviewPort(std::span<const BYTE> ReceiveBuffer)
 
             c->m_iDeleteTime = 150;
 
-            ChangeCharacterExt(FindCharacterIndex(Key), pData2->m_byEquipment);
+            const int characterIndex = FindCharacterIndex(Key);
+            if (characterIndex >= 0 && characterIndex < MAX_CHARACTERS_CLIENT)
+            {
+                ChangeCharacterExt(characterIndex, pData2->m_byEquipment);
+            }
 
             wcscpy(c->ID, L"   ");
             c->ID[MAX_USERNAME_SIZE] = 0;
@@ -11674,7 +12594,15 @@ void ReceivePreviewPort(std::span<const BYTE> ReceiveBuffer)
         {
             auto Type = (EMonsterType)(((WORD)(pData2->m_byTypeH) << 8) + pData2->m_byTypeL);
             CHARACTER* c = CreateMonster(Type, pData2->m_byPosX, pData2->m_byPosY, Key);
-            if (c == nullptr) break;
+            if (!IsValidClientCharacter(c))
+            {
+                g_ErrorReport.Write(
+                    L"[ReceivePreviewPort] skipped monster type=%d key=%d because no valid client character slot was available\r\n",
+                    static_cast<int>(Type),
+                    Key);
+                break;
+            }
+
             OBJECT* o = &c->Object;
 
             for (int j = 0; j < pData2->s_BuffCount; ++j)
@@ -13274,10 +14202,25 @@ static void ProcessPacket(const BYTE* ReceiveBuffer, int32_t Size)
         switch (subcode)
         {
         case 0x00: //receive characters list
-            ReceiveCharacterListExtended(ReceiveBuffer);
+            g_ErrorReport.Write(
+                L"[ProcessPacket] dispatch F3/00 character list size=%d\r\n",
+                Size);
+            ReceiveCharacterListExtended(received_span);
             break;
         case 0x01: //receive create character
             ReceiveCreateCharacter(ReceiveBuffer);
+            break;
+        case 0xF1: //receive character power scores
+            ReceiveCharacterPowerScores(received_span);
+            break;
+        case 0xF2: //receive persistent character order update
+            ReceiveCharacterReorderResponse(received_span);
+            break;
+        case 0xF3: //receive account character slot capacity
+            if (received_span.size() >= 5)
+            {
+                AccountCharacterList::SetUnlockedSlotCount(static_cast<int>(received_span[4]));
+            }
             break;
         case 0x02: //receive delete character
             ReceiveDeleteCharacter(ReceiveBuffer);
@@ -13456,7 +14399,7 @@ static void ProcessPacket(const BYTE* ReceiveBuffer, int32_t Size)
         ReceiveCreateMoney(received_span);
         break;
     case 0x21://delete item
-        ReceiveDeleteItemViewport(ReceiveBuffer);
+        ReceiveDeleteItemViewport(received_span);
         break;
     case 0x22://get item
         ReceiveGetItem(received_span);

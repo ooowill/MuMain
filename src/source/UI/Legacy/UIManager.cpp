@@ -16,6 +16,10 @@
 #include "UI/Legacy/UIControls.h"  // CUITextInputBox::GetFocusedPortable (issue #447)
 #include "UI/NewUI/Dialogs/NewUICustomMessageBox.h"
 #include "UI/NewUI/NPCs/NewUINPCShop.h"
+#include <cstdint>
+#include <iomanip>
+#include <sstream>
+#include <string>
 
 extern int g_iKeyPadEnable;
 extern int g_iChatInputType;
@@ -34,9 +38,9 @@ namespace SEASON3B
 {
 	int& MouseY = ::MouseY;
 	int& g_iCancelSkillTarget = ::g_iCancelSkillTarget;
-	wchar_t (&TextList)[50][100] = ::TextList;
-	int (&TextListColor)[50] = ::TextListColor;
-	int (&TextBold)[50] = ::TextBold;
+	auto& TextList = ::TextList;
+	auto& TextListColor = ::TextListColor;
+	auto& TextBold = ::TextBold;
 	int& TextNum = ::TextNum;
 	int (&g_iItemInfo)[16][17] = ::g_iItemInfo;
 	int& ItemHelp = ::ItemHelp;
@@ -49,6 +53,140 @@ extern int   ShopInventoryStartY;
 
 extern bool g_bTradeEndByOppenent;
 extern bool LogOut;
+extern wchar_t LogInID[MAX_USERNAME_SIZE + 1];
+extern wchar_t g_WebStoreTicket[65];
+
+namespace
+{
+    std::wstring GetPersonalStoreExecutableDirectory()
+    {
+        wchar_t exePath[MAX_PATH]{};
+        if (GetModuleFileNameW(nullptr, exePath, MAX_PATH) == 0)
+        {
+            return L".";
+        }
+
+        std::wstring directory(exePath);
+        const std::wstring::size_type separator = directory.find_last_of(L"\\/");
+        if (separator == std::wstring::npos)
+        {
+            return L".";
+        }
+
+        return directory.substr(0, separator);
+    }
+
+    std::string ToPersonalStoreUtf8(const wchar_t* text)
+    {
+        if (text == nullptr || text[0] == L'\0')
+        {
+            return {};
+        }
+
+        const int byteCount = WideCharToMultiByte(CP_UTF8, 0, text, -1, nullptr, 0, nullptr, nullptr);
+        if (byteCount <= 1)
+        {
+            return {};
+        }
+
+        std::string output(static_cast<size_t>(byteCount - 1), '\0');
+        WideCharToMultiByte(CP_UTF8, 0, text, -1, output.data(), byteCount, nullptr, nullptr);
+        return output;
+    }
+
+    std::wstring ToPersonalStoreWide(const std::string& text)
+    {
+        if (text.empty())
+        {
+            return {};
+        }
+
+        const int characterCount = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, nullptr, 0);
+        if (characterCount <= 1)
+        {
+            return {};
+        }
+
+        std::wstring output(static_cast<size_t>(characterCount - 1), L'\0');
+        MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, output.data(), characterCount);
+        return output;
+    }
+
+    std::string UrlEncodePersonalStoreValue(const std::string& value)
+    {
+        std::ostringstream encoded;
+        encoded << std::uppercase << std::hex;
+
+        for (const unsigned char character : value)
+        {
+            if ((character >= 'A' && character <= 'Z')
+                || (character >= 'a' && character <= 'z')
+                || (character >= '0' && character <= '9')
+                || character == '-' || character == '_' || character == '.' || character == '~')
+            {
+                encoded << static_cast<char>(character);
+                continue;
+            }
+
+            encoded << '%' << std::setw(2) << std::setfill('0') << static_cast<int>(character);
+        }
+
+        return encoded.str();
+    }
+
+    bool LaunchPersonalStoreBrowserOverlayUrl(const std::string& url)
+    {
+        const INT_PTR result = reinterpret_cast<INT_PTR>(ShellExecuteW(
+            g_hWnd,
+            L"open",
+            ToPersonalStoreWide(url).c_str(),
+            nullptr,
+            nullptr,
+            SW_SHOWNORMAL));
+
+        return result > 32;
+    }
+
+    bool LaunchPersonalStoreBrowserOverlay()
+    {
+        const std::string character = UrlEncodePersonalStoreValue(ToPersonalStoreUtf8(Hero != nullptr ? Hero->ID : L""));
+        const std::string storeTicket = UrlEncodePersonalStoreValue(ToPersonalStoreUtf8(g_WebStoreTicket));
+        std::string url = "https://user.muonline.pt/store";
+        if (!storeTicket.empty())
+        {
+            url += "?store_ticket=" + storeTicket;
+        }
+
+        if (!character.empty())
+        {
+            url += (storeTicket.empty() ? "?" : "&");
+            url += "character=" + character;
+        }
+
+        return LaunchPersonalStoreBrowserOverlayUrl(url);
+    }
+}
+
+bool LaunchPersonalStoreBrowserOverlayForCurrentAccount()
+{
+    return LaunchPersonalStoreBrowserOverlay();
+}
+
+bool LaunchPersonalStoreBrowserOverlayForSeller(const wchar_t* sellerName)
+{
+    const std::string seller = UrlEncodePersonalStoreValue(ToPersonalStoreUtf8(sellerName));
+    std::string url = "https://user.muonline.pt";
+    if (!seller.empty())
+    {
+        url += "/" + seller + "/store";
+    }
+    else
+    {
+        url += "/store";
+    }
+
+    return LaunchPersonalStoreBrowserOverlayUrl(url);
+}
 
 bool HeroInventoryEnable = false;
 bool GuildListEnable = false;
@@ -278,6 +416,7 @@ bool CUIManager::Open(DWORD dwInterface, DWORD dwExtraData)
 
             g_bPersonalShopWnd = true;
             g_iPShopWndType = PSHOPWNDTYPE_SALE;
+            LaunchPersonalStoreBrowserOverlay();
         }
     }
     break;

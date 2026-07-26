@@ -93,10 +93,13 @@ void RenderTimes();
 void RenderPartyHP();
 
 void SendMove(CHARACTER* c, OBJECT* o);
+void SendMacroChat(wchar_t* Text);
 void SetCharacterPos(CHARACTER* c, BYTE posX, BYTE posY, vec3_t position);
 
 bool CheckAttack();
 bool CheckAttack_Fenrir(CHARACTER* c);
+bool IsSelectedPvpServerForAutoAttack();
+bool IsPvpServerAutoAttackTarget(CHARACTER* character, int selected);
 int	 getTargetCharacterKey(CHARACTER* c, int selected);
 
 void MoveTournamentInterface();

@@ -31,9 +31,9 @@
 #include "Render/Textures/ZzzTexture.h"
 
 extern  bool    SkillEnable;
-extern	wchar_t TextList[50][100];
-extern	int     TextListColor[50];
-extern	int     TextBold[50];
+extern	wchar_t TextList[64][100];
+extern	int     TextListColor[64];
+extern	int     TextBold[64];
 extern  int     CheckX;
 extern  int     CheckY;
 extern  int     CheckSkill;
@@ -755,6 +755,8 @@ namespace giPetManager
             appendLine(TEXT_COLOR_BLUE, false, true, I18N::Game::AbsorbDAdditionalDamage, (30 + pPetInfo->m_wLevel) / 2);
             appendLine(TEXT_COLOR_BLUE, false, false, I18N::Game::IncreaseDPossibleAttackDistance, 2);
         }
+
+        TextNum = AppendItemEvolutionTooltip(pItem, TextNum, SkipNum);
 
         SIZE TextSize = { 0, 0 };
         GetTextExtentPoint32(g_pRenderText->GetFontDC(), TextList[0], 1, &TextSize);

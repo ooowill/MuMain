@@ -20,6 +20,7 @@
 #include "World/MapInfra/MapManager.h"
 #include "Camera/CameraMove.h"
 #include "UI/NewUI/NewUISystem.h"
+#include "Data/GameConfig/GameConfig.h"
 
 int EnableEvent = 0;
 
@@ -68,6 +69,11 @@ bool CreateMountSub(int Type, vec3_t Position, OBJECT* Owner, OBJECT* o, int Sub
     if (gMapManager.InChaosCastle() == true)
     {
         return false;
+    }
+
+    if (SceneFlag == MAIN_SCENE && GameConfig::GetInstance().GetHideMountsPets())
+    {
+        return true;
     }
 
     if (!o->Live)
@@ -673,6 +679,11 @@ bool RenderMount(OBJECT* o, bool bForceRender)
 {
     if (o->Live)
     {
+        if (!bForceRender && SceneFlag == MAIN_SCENE && GameConfig::GetInstance().GetHideMountsPets())
+        {
+            return TRUE;
+        }
+
         o->Visible = (bForceRender == FALSE ? TestFrustrum2D(o->Position[0] * 0.01f, o->Position[1] * 0.01f, -20.f) : true);
 
         if (o->Visible)
@@ -1244,6 +1255,12 @@ void MoveBoids()
                 bOut = TRUE;
             }
             break;
+        case WD_73NEW_LOGIN_SCENE:
+            if (i >= 8)
+            {
+                bOut = true;
+            }
+            break;
         default:
             if (gMapManager.InHellas() == true)
             {
@@ -1301,6 +1318,7 @@ void MoveBoids()
                 }
             }
             else if (gMapManager.WorldActive == WD_0LORENCIA
+                || gMapManager.WorldActive == WD_73NEW_LOGIN_SCENE
                 || gMapManager.WorldActive == WD_1DUNGEON
                 || gMapManager.WorldActive == WD_3NORIA
                 || gMapManager.WorldActive == WD_4LOSTTOWER
@@ -1327,7 +1345,7 @@ void MoveBoids()
                 o->AI = 0;
                 o->CurrentAction = 0;
 
-                if (gMapManager.WorldActive == WD_0LORENCIA)
+                if (gMapManager.WorldActive == WD_0LORENCIA || gMapManager.WorldActive == WD_73NEW_LOGIN_SCENE)
                     o->Type = MODEL_BIRD01;
                 else if (gMapManager.WorldActive == WD_1DUNGEON || gMapManager.WorldActive == WD_4LOSTTOWER)
                     o->Type = MODEL_BAT01;
@@ -1369,7 +1387,7 @@ void MoveBoids()
                 if (iCreateBoid != 1)
                 {
                     o->AlphaEnable = true;
-                    o->Scale = 0.8f;
+                    o->Scale = (gMapManager.WorldActive == WD_73NEW_LOGIN_SCENE) ? 0.07f : 0.8f;
                     o->ShadowScale = 10.f;
                     o->HiddenMesh = -1;
                     o->BlendMesh = -1;
@@ -1377,7 +1395,17 @@ void MoveBoids()
                     Vector(Hero->Object.Position[0] + (float)(rand() % 1024 - 512),
                         Hero->Object.Position[1] + (float)(rand() % 1024 - 512),
                         Hero->Object.Position[2], o->Position);
-                    o->Position[2] = RequestTerrainHeight(o->Position[0], o->Position[1]) + (float)(rand() % 200 + 150);
+                    if (gMapManager.WorldActive == WD_73NEW_LOGIN_SCENE)
+                    {
+                        o->Position[0] = 21400.0f + (float)(rand() % 3200 - 1600);
+                        o->Position[1] = 8000.0f + (float)(rand() % 1200);
+                        o->Velocity = 0.45f;
+                        o->Position[2] = RequestTerrainHeight(o->Position[0], o->Position[1]) + (float)(rand() % 160 + 620);
+                    }
+                    else
+                    {
+                        o->Position[2] = RequestTerrainHeight(o->Position[0], o->Position[1]) + (float)(rand() % 200 + 150);
+                    }
                     Vector(0.f, 0.f, 0.f, o->Angle);
                 }
             }

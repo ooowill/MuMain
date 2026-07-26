@@ -7015,14 +7015,30 @@ void PruneGroundItemLabelCache(DWORD currentTick)
     }
 }
 
+bool IsValidGroundItemLabelInput(const OBJECT* o, const ITEM* ip)
+{
+    return o != nullptr
+        && ip != nullptr
+        && o->Live
+        && o->Type >= MODEL_ITEM
+        && o->Type < MAX_MODELS
+        && ip->Type >= 0
+        && ip->Type < MAX_ITEM;
+}
+
 void BuildGroundItemLabelDescriptor(OBJECT* o, ITEM* ip, GroundItemLabelDescriptor& descriptor)
 {
-    auto ItemLevel = ip->Level;
-    auto ItemOption = ip->ExcellentFlags;
-
     descriptor.Font = g_hFont;
     descriptor.TextColor = MakeRgba(255, 255, 255, 255);
     descriptor.BgColor = MakeRgba(0, 0, 0, 255);
+
+    if (!IsValidGroundItemLabelInput(o, ip))
+    {
+        return;
+    }
+
+    auto ItemLevel = ip->Level;
+    auto ItemOption = ip->ExcellentFlags;
 
     // Use the item name by default
     if (o->Type == MODEL_ZEN) // Zen
@@ -7035,15 +7051,15 @@ void BuildGroundItemLabelDescriptor(OBJECT* o, ITEM* ip, GroundItemLabelDescript
             return;
         }
 
-        FormatGroundItemLabelText(descriptor.Name, L"%ls %d", ItemAttribute[o->Type - MODEL_ITEM].Name, ItemLevel);
+        FormatGroundItemLabelText(descriptor.Name, L"%ls %d", ItemAttribute[ip->Type].Name, ItemLevel);
     }
     else if (ItemLevel == 0)
     {
-        CopyGroundItemLabelText(descriptor.Name, ItemAttribute[o->Type - MODEL_ITEM].Name);
+        CopyGroundItemLabelText(descriptor.Name, ItemAttribute[ip->Type].Name);
     }
     else
     {
-        FormatGroundItemLabelText(descriptor.Name, L"%ls +%d", ItemAttribute[o->Type - MODEL_ITEM].Name, ItemLevel);
+        FormatGroundItemLabelText(descriptor.Name, L"%ls +%d", ItemAttribute[ip->Type].Name, ItemLevel);
     }
 
     if (ContainsItemType(boldTextItems, o->Type))
@@ -7100,19 +7116,19 @@ void BuildGroundItemLabelDescriptor(OBJECT* o, ITEM* ip, GroundItemLabelDescript
     {
         switch (ItemLevel)
         {
-        case 0: FormatGroundItemLabelText(descriptor.Name, L"%ls %ls", I18N::Game::ENG, ItemAttribute[o->Type - MODEL_ITEM].Name); break;
-        case 1: FormatGroundItemLabelText(descriptor.Name, L"%ls %ls", I18N::Game::STA, ItemAttribute[o->Type - MODEL_ITEM].Name); break;
-        case 2: FormatGroundItemLabelText(descriptor.Name, L"%ls %ls", I18N::Game::AGI, ItemAttribute[o->Type - MODEL_ITEM].Name); break;
-        case 3: FormatGroundItemLabelText(descriptor.Name, L"%ls %ls", I18N::Game::STR, ItemAttribute[o->Type - MODEL_ITEM].Name); break;
-        case 4: FormatGroundItemLabelText(descriptor.Name, L"%ls %ls", I18N::Game::Command, ItemAttribute[o->Type - MODEL_ITEM].Name); break;
+        case 0: FormatGroundItemLabelText(descriptor.Name, L"%ls %ls", I18N::Game::ENG, ItemAttribute[ip->Type].Name); break;
+        case 1: FormatGroundItemLabelText(descriptor.Name, L"%ls %ls", I18N::Game::STA, ItemAttribute[ip->Type].Name); break;
+        case 2: FormatGroundItemLabelText(descriptor.Name, L"%ls %ls", I18N::Game::AGI, ItemAttribute[ip->Type].Name); break;
+        case 3: FormatGroundItemLabelText(descriptor.Name, L"%ls %ls", I18N::Game::STR, ItemAttribute[ip->Type].Name); break;
+        case 4: FormatGroundItemLabelText(descriptor.Name, L"%ls %ls", I18N::Game::Command, ItemAttribute[ip->Type].Name); break;
         }
     }
     else if (o->Type == MODEL_SPIRIT)
     {
         switch (ItemLevel)
         {
-        case 0: FormatGroundItemLabelText(descriptor.Name, L"%ls of %ls", ItemAttribute[o->Type - MODEL_ITEM].Name, I18N::Game::DarkHorse); break;
-        case 1: FormatGroundItemLabelText(descriptor.Name, L"%ls of %ls", ItemAttribute[o->Type - MODEL_ITEM].Name, I18N::Game::DarkRaven); break;
+        case 0: FormatGroundItemLabelText(descriptor.Name, L"%ls of %ls", ItemAttribute[ip->Type].Name, I18N::Game::DarkHorse); break;
+        case 1: FormatGroundItemLabelText(descriptor.Name, L"%ls of %ls", ItemAttribute[ip->Type].Name, I18N::Game::DarkRaven); break;
         }
     }
     else if (o->Type == MODEL_EVENT + 16)
@@ -7311,7 +7327,7 @@ void BuildGroundItemLabelDescriptor(OBJECT* o, ITEM* ip, GroundItemLabelDescript
         || (o->Type >= MODEL_SEED_SPHERE_FIRE_1 && o->Type <= MODEL_SEED_SPHERE_EARTH_5))
     {
         SetDescriptorTextColor(descriptor, 0.7f, 0.4f, 1.0f);
-        CopyGroundItemLabelText(descriptor.Name, ItemAttribute[o->Type - MODEL_ITEM].Name);
+        CopyGroundItemLabelText(descriptor.Name, ItemAttribute[ip->Type].Name);
     }
     else if (o->Type == MODEL_HELPER + 66)
     {
@@ -7602,7 +7618,27 @@ void SetGroundItemLabelBuildBudget(int buildBudget)
 
 void RenderItemName(int i, OBJECT* o, ITEM* ip, bool Sort)
 {
-    (void)i;
+    if (!IsValidGroundItemLabelInput(o, ip))
+    {
+        const int objectType = o != nullptr ? o->Type : -1;
+        const int itemType = ip != nullptr ? ip->Type : -1;
+        if (o != nullptr)
+        {
+            o->Live = false;
+        }
+
+        if (SelectedItem == i)
+        {
+            SelectedItem = -1;
+        }
+
+        g_ErrorReport.Write(
+            L"> Invalid ground item slot disabled before rendering (id=%d, objectType=%d, itemType=%d).\r\n",
+            i,
+            objectType,
+            itemType);
+        return;
+    }
 
     if (!Sort)
     {
@@ -7706,10 +7742,13 @@ int GetScreenWidth()
 
 void ClearInventory()
 {
-    for (int i = 0; i < MAX_EQUIPMENT; i++)
+    for (auto& item : CharacterMachine->Equipment)
     {
-        CharacterMachine->Equipment[i].Type = -1;
-        CharacterMachine->Equipment[i].Number = 0;
+        memset(&item, 0, sizeof(item));
+        item.Type = -1;
+        item.Number = -1;
+        std::fill(std::begin(item.bySocketOption), std::end(item.bySocketOption), SOCKET_EMPTY);
+        std::fill(std::begin(item.SocketSeedID), std::end(item.SocketSeedID), SOCKET_EMPTY);
     }
     for (int i = 0; i < MAX_INVENTORY; i++)
     {

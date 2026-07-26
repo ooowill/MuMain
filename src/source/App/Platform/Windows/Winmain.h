@@ -67,11 +67,13 @@ extern int       RandomTable[];
 
 extern wchar_t m_Username[11];
 extern wchar_t m_Password[21];
+extern wchar_t g_WebStoreTicket[65];
 extern wchar_t m_Version[];
 extern int  m_SoundOnOff;
 extern int  m_MusicOnOff;
 extern int  m_Resolution;
 extern int m_RememberMe;
+extern int m_AutoLoginOnce;
 extern int g_MaxMessagePerCycle;
 extern double CPU_AVG;
 

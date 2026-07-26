@@ -55,6 +55,13 @@ public:
     /// Causes reaction on server side: The server is authenticating the sent login name and password. If it's correct, the state of the player is proceeding to be logged in.
     /// </remarks>
     void SendLogin(const wchar_t* username, const wchar_t* password, const BYTE* clientVersion, const BYTE* clientSerial);
+
+    void SendAntiCheatLaunchTicket(
+        const wchar_t* ticket,
+        const wchar_t* clientBuildId,
+        const wchar_t* manifestVersion,
+        const wchar_t* launcherVersion,
+        const wchar_t* policyVersion);
 };
 
 /// <summary>

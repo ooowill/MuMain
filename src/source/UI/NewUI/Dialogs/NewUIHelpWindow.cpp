@@ -97,13 +97,13 @@ bool SEASON3B::CNewUIHelpWindow::Render()
     glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
 
     // Reference-bind to the global arrays in ZzzInventory.cpp. A naive
-    // `extern wchar_t TextList[50][100];` here would resolve to
+    // `extern wchar_t TextList[64][100];` here would resolve to
     // SEASON3B::TextList (the reference defined in UIManager.cpp) because
     // this function is in the SEASON3B namespace -- and the linker stores
     // that reference as a 4-byte read-only pointer, so writing to it crashes.
-    wchar_t (&TextList)[50][100] = ::TextList;
-    int (&TextListColor)[50] = ::TextListColor;
-    int (&TextBold)[50] = ::TextBold;
+    wchar_t (&TextList)[64][100] = ::TextList;
+    int (&TextListColor)[64] = ::TextListColor;
+    int (&TextBold)[64] = ::TextBold;
 
     if (m_iIndex == 0)
     {

@@ -27,6 +27,8 @@
 #include "Character/CharacterManager.h"
 #include "GameLogic/Skills/SkillManager.h"
 
+#include <algorithm>
+
 CLASS_ATTRIBUTE     ClassAttribute[MAX_CLASS];
 MONSTER_SCRIPT      MonsterScript[MAX_MONSTER];
 GATE_ATTRIBUTE* GateAttribute = NULL;
@@ -1100,6 +1102,13 @@ void CalcPartType(ITEM* ip)
 
 void SetItemAttributes(ITEM* ip)
 {
+    if (ip == nullptr || ip->Type < 0 || ip->Type >= MAX_ITEM)
+    {
+        return;
+    }
+
+    ip->Level = std::clamp(ip->Level, 0, 15);
+
     int excelAddValue = GetExcellentAddValue(ip);
     
     ITEM_ATTRIBUTE* p = &ItemAttribute[ip->Type];
@@ -1124,7 +1133,9 @@ void SetItemAttributes(ITEM* ip)
 
     CalcWingOptions(ip);
 
-    if (ip->HasSkill)
+    const bool shouldApplyBuiltinSkill = ip->HasSkill
+        || ip->Type == ITEM_RUNE_BLADE;
+    if (shouldApplyBuiltinSkill)
     {
         if (p->m_wSkillIndex != 0)
         {
@@ -1456,7 +1467,7 @@ void SetItemAttributes(ITEM* ip)
 
 int64_t ItemValue(ITEM* ip, int goldType)
 {
-    if (ip->Type == -1) return 0;
+    if (ip == nullptr || ip->Type < 0 || ip->Type >= MAX_ITEM) return 0;
 
     ITEM_ATTRIBUTE* p = &ItemAttribute[ip->Type];
 
@@ -2206,9 +2217,28 @@ EXIT_CALCULATE:
     return (int64_t)Gold;
 }
 
+namespace
+{
+    bool IsValidCharacterItem(const ITEM* pItem)
+    {
+        return pItem != nullptr && pItem->Type >= 0 && pItem->Type < MAX_ITEM;
+    }
+
+    bool IsUsableCharacterItem(const ITEM* pItem)
+    {
+        return IsValidCharacterItem(pItem) && pItem->Durability != 0;
+    }
+
+    const ITEM_ATTRIBUTE* GetCharacterItemAttribute(const ITEM* pItem)
+    {
+        return IsValidCharacterItem(pItem) ? &ItemAttribute[pItem->Type] : nullptr;
+    }
+}
+
 bool IsRequireEquipItem(ITEM* pItem)
 {
-    if (pItem == NULL) {
+    if (!IsValidCharacterItem(pItem) || Hero == nullptr || CharacterAttribute == nullptr)
+    {
         return false;
     }
 
@@ -2216,16 +2246,23 @@ bool IsRequireEquipItem(ITEM* pItem)
 
     bool bEquipable = false;
 
-    if (pItemAttr->RequireClass[gCharacterManager.GetBaseClass(Hero->Class)]) {
+    const BYTE byFirstClass = gCharacterManager.GetBaseClass(Hero->Class);
+    const BYTE byStepClass = gCharacterManager.GetStepClass(Hero->Class);
+    if (byFirstClass >= MAX_CLASS)
+    {
+        return false;
+    }
+
+    if (pItemAttr->RequireClass[byFirstClass])
+    {
         bEquipable = true;
     }
-    else if (gCharacterManager.GetBaseClass(Hero->Class) == CLASS_DARK && pItemAttr->RequireClass[CLASS_WIZARD]
-        && pItemAttr->RequireClass[CLASS_KNIGHT]) {
+    else if (byFirstClass == CLASS_DARK && pItemAttr->RequireClass[CLASS_WIZARD]
+        && pItemAttr->RequireClass[CLASS_KNIGHT])
+    {
         bEquipable = true;
     }
 
-    BYTE byFirstClass = gCharacterManager.GetBaseClass(Hero->Class);
-    BYTE byStepClass = gCharacterManager.GetStepClass(Hero->Class);
     if (pItemAttr->RequireClass[byFirstClass] > byStepClass)
     {
         return false;
@@ -2274,8 +2311,14 @@ bool IsRequireEquipItem(ITEM* pItem)
     if (pItem->Type == ITEM_DARK_RAVEN_ITEM)
     {
         PET_INFO* pPetInfo = giPetManager::GetPetInfo(pItem);
+        if (pPetInfo == nullptr)
+        {
+            return false;
+        }
+
         WORD wRequireCharisma = static_cast<WORD>((185 + pPetInfo->m_wLevel * 15) & 0xFFFF);
-        if (wRequireCharisma > wCharisma) {
+        if (wRequireCharisma > wCharisma)
+        {
             return false;
         }
     }
@@ -2285,13 +2328,13 @@ bool IsRequireEquipItem(ITEM* pItem)
 
 void PlusSpecial(WORD* Value, int Special, ITEM* Item)
 {
-    if (Item->Type == -1) {
+    if (!IsValidCharacterItem(Item)) {
         return;
     }
 
     if (IsRequireEquipItem(Item))
     {
-        for (int i = 0; i < Item->SpecialNum; i++)
+        for (int i = 0; i < std::min<int>(Item->SpecialNum, MAX_ITEM_SPECIAL); i++)
         {
             if (Item->Special[i] == Special && Item->Durability != 0)
                 *Value += Item->SpecialValue[i];
@@ -2301,11 +2344,11 @@ void PlusSpecial(WORD* Value, int Special, ITEM* Item)
 
 void PlusSpecialPercent(WORD* Value, int Special, ITEM* Item, WORD Percent)
 {
-    if (Item->Type == -1) return;
+    if (!IsValidCharacterItem(Item)) return;
 
     if (IsRequireEquipItem(Item))
     {
-        for (int i = 0; i < Item->SpecialNum; i++)
+        for (int i = 0; i < std::min<int>(Item->SpecialNum, MAX_ITEM_SPECIAL); i++)
         {
             if (Item->Special[i] == Special && Item->Durability != 0)
                 *Value += *Value * Percent / 100;
@@ -2315,11 +2358,11 @@ void PlusSpecialPercent(WORD* Value, int Special, ITEM* Item, WORD Percent)
 
 void PlusSpecialPercent2(WORD* Value, int Special, ITEM* Item)
 {
-    if (Item->Type == -1) return;
+    if (!IsValidCharacterItem(Item)) return;
 
     if (IsRequireEquipItem(Item))
     {
-        for (int i = 0; i < Item->SpecialNum; i++)
+        for (int i = 0; i < std::min<int>(Item->SpecialNum, MAX_ITEM_SPECIAL); i++)
         {
             if (Item->Special[i] == Special && Item->Durability != 0)
                 *Value += (unsigned short)(*Value * (Item->SpecialValue[i] / 100.f));
@@ -2329,7 +2372,7 @@ void PlusSpecialPercent2(WORD* Value, int Special, ITEM* Item)
 
 WORD ItemDefense(ITEM* Item)
 {
-    if (Item->Type == -1) return 0;
+    if (!IsValidCharacterItem(Item)) return 0;
     WORD Defense = Item->Defense;
     PlusSpecial(&Defense, AT_IMPROVE_DEFENSE, Item);
     return Defense;
@@ -2337,7 +2380,7 @@ WORD ItemDefense(ITEM* Item)
 
 WORD ItemMagicDefense(ITEM* Item)
 {
-    if (Item->Type == -1) return 0;
+    if (!IsValidCharacterItem(Item)) return 0;
     WORD MagicDefense = Item->MagicDefense;
     //PlusSpecial(&MagicDefense,PLUS_MAGIC_DEFENSE,Item);
     return MagicDefense;
@@ -2345,7 +2388,7 @@ WORD ItemMagicDefense(ITEM* Item)
 
 WORD ItemWalkSpeed(ITEM* Item)
 {
-    if (Item->Type == -1) return 0;
+    if (!IsValidCharacterItem(Item)) return 0;
     WORD WalkSpeed = Item->WalkSpeed;
     //PlusSpecial(&WalkSpeed,PLUS_WALK_SPEED,Item);
     return WalkSpeed;
@@ -2438,8 +2481,9 @@ void CreateClassAttributes()
 
 float CalcDurabilityPercent(BYTE dur, BYTE maxDur, int Level, int excellentFlags, int ancientDiscriminator)
 {
-    int maxDurability = maxDur;
-    for (int i = 0; i < Level; i++)
+    const int safeLevel = std::clamp(Level, 0, 15);
+    int maxDurability = std::max<int>(maxDur, 1);
+    for (int i = 0; i < safeLevel; i++)
     {
         if (i >= 4)
         {
@@ -2553,7 +2597,8 @@ void CHARACTER_MACHINE::CalculateDamage()
 
     int CharacterClass = gCharacterManager.GetBaseClass(Character.Class);
 
-    if (((gCharacterManager.GetEquipedBowType(Left) == BOWTYPE_BOW) && (Left->Durability != 0)) || ((gCharacterManager.GetEquipedBowType(Right) == BOWTYPE_CROSSBOW) && (Right->Durability != 0)))
+    if ((IsUsableCharacterItem(Left) && gCharacterManager.GetEquipedBowType(Left) == BOWTYPE_BOW)
+        || (IsUsableCharacterItem(Right) && gCharacterManager.GetEquipedBowType(Right) == BOWTYPE_CROSSBOW))
     {
         Character.AttackDamageMinRight = Dexterity / 7 + Strength / 14;
         Character.AttackDamageMaxRight = Dexterity / 4 + Strength / 8;
@@ -2627,11 +2672,11 @@ void CHARACTER_MACHINE::CalculateDamage()
         }
     }
 
-    if (Equipment[EQUIPMENT_WING].Type != -1)
+    if (IsUsableCharacterItem(&Equipment[EQUIPMENT_WING]))
     {
-        ITEM_ATTRIBUTE* p = &ItemAttribute[Equipment[EQUIPMENT_WING].Type];
+        const ITEM_ATTRIBUTE* p = GetCharacterItemAttribute(&Equipment[EQUIPMENT_WING]);
 
-        if (p->Durability != 0)
+        if (p != nullptr && p->Durability != 0)
         {
             float   percent = CalcDurabilityPercent(Equipment[EQUIPMENT_WING].Durability, p->Durability, Equipment[EQUIPMENT_WING].Level, 0, 0);//Equipment[EQUIPMENT_WING].Option1);
 
@@ -2649,9 +2694,13 @@ void CHARACTER_MACHINE::CalculateDamage()
         }
     }
 
-    if (Right->Type != -1 && Right->Durability != 0)
+    if (IsUsableCharacterItem(Right))
     {
-        ITEM_ATTRIBUTE* p = &ItemAttribute[Right->Type];
+        const ITEM_ATTRIBUTE* p = GetCharacterItemAttribute(Right);
+        if (p == nullptr)
+        {
+            return;
+        }
         float   percent = CalcDurabilityPercent(Right->Durability, p->Durability, Right->Level, Right->ExcellentFlags, Right->AncientDiscriminator);
 
         DamageMin = Right->DamageMin;
@@ -2680,9 +2729,13 @@ void CHARACTER_MACHINE::CalculateDamage()
         PlusSpecialPercent(&Character.AttackDamageMaxRight, AT_IMPROVE_DAMAGE_PERCENT, Right, 2);
     }
 
-    if (Left->Type != -1 && Left->Durability != 0)
+    if (IsUsableCharacterItem(Left))
     {
-        ITEM_ATTRIBUTE* p = &ItemAttribute[Left->Type];
+        const ITEM_ATTRIBUTE* p = GetCharacterItemAttribute(Left);
+        if (p == nullptr)
+        {
+            return;
+        }
         float   percent = CalcDurabilityPercent(Left->Durability, p->Durability, Left->Level, Left->ExcellentFlags, Left->AncientDiscriminator);
 
         DamageMin = Left->DamageMin;
@@ -2711,7 +2764,7 @@ void CHARACTER_MACHINE::CalculateDamage()
         PlusSpecialPercent(&Character.AttackDamageMaxLeft, AT_IMPROVE_DAMAGE_PERCENT, Left, 2);
     }
 
-    if (Amulet->Type != -1 && Amulet->Durability != 0)
+    if (IsUsableCharacterItem(Amulet))
     {
         PlusSpecial(&Character.AttackDamageMinRight, AT_IMPROVE_DAMAGE_LEVEL, Amulet);
         PlusSpecial(&Character.AttackDamageMaxRight, AT_IMPROVE_DAMAGE_LEVEL, Amulet);
@@ -2723,14 +2776,14 @@ void CHARACTER_MACHINE::CalculateDamage()
         PlusSpecialPercent(&Character.AttackDamageMinLeft, AT_IMPROVE_DAMAGE_PERCENT, Amulet, 2);
         PlusSpecialPercent(&Character.AttackDamageMaxLeft, AT_IMPROVE_DAMAGE_PERCENT, Amulet, 2);
     }
-    if (RRing->Type != -1 && RRing->Durability != 0)
+    if (IsUsableCharacterItem(RRing))
     {
         PlusSpecialPercent(&Character.AttackDamageMinRight, AT_IMPROVE_DAMAGE_PERCENT, RRing, RRing->SpecialValue[1]);
         PlusSpecialPercent(&Character.AttackDamageMaxRight, AT_IMPROVE_DAMAGE_PERCENT, RRing, RRing->SpecialValue[1]);
         PlusSpecialPercent(&Character.AttackDamageMinLeft, AT_IMPROVE_DAMAGE_PERCENT, RRing, RRing->SpecialValue[1]);
         PlusSpecialPercent(&Character.AttackDamageMaxLeft, AT_IMPROVE_DAMAGE_PERCENT, RRing, RRing->SpecialValue[1]);
     }
-    if (LRing->Type != -1 && LRing->Durability != 0)
+    if (IsUsableCharacterItem(LRing))
     {
         PlusSpecialPercent(&Character.AttackDamageMinRight, AT_IMPROVE_DAMAGE_PERCENT, LRing, LRing->SpecialValue[1]);
         PlusSpecialPercent(&Character.AttackDamageMaxRight, AT_IMPROVE_DAMAGE_PERCENT, LRing, LRing->SpecialValue[1]);
@@ -2764,7 +2817,9 @@ void CHARACTER_MACHINE::CalculateDamage()
     Character.AttackDamageMinLeft += Damage;
     Character.AttackDamageMaxLeft += Damage;
 
-    if ((Right->Type >= ITEM_BOW && Right->Type < ITEM_BOW + MAX_ITEM_INDEX) && (Left->Type >= ITEM_BOW && Left->Type < ITEM_BOW + MAX_ITEM_INDEX))
+    if (IsValidCharacterItem(Right) && IsValidCharacterItem(Left)
+        && (Right->Type >= ITEM_BOW && Right->Type < ITEM_BOW + MAX_ITEM_INDEX)
+        && (Left->Type >= ITEM_BOW && Left->Type < ITEM_BOW + MAX_ITEM_INDEX))
     {
         int LLevel = Left->Level;
         int RLevel = Right->Level;
@@ -2781,7 +2836,7 @@ void CHARACTER_MACHINE::CalculateDamage()
                 Character.AttackDamageMaxLeft += (WORD)(Character.AttackDamageMaxLeft * ((RLevel * 2 + 1) * 0.01f) + 1);
             }
     }
-    if (g_isCharacterBuff((&Hero->Object), eBuff_EliteScroll3))
+    if (Hero != nullptr && g_isCharacterBuff((&Hero->Object), eBuff_EliteScroll3))
     {
         ITEM_ADD_OPTION Item_data = g_pItemAddOptioninfo->GetItemAddOtioninfo(ITEM_POTION + 74);
         Character.AttackDamageMinRight += Item_data.m_byValue1;
@@ -2789,7 +2844,7 @@ void CHARACTER_MACHINE::CalculateDamage()
         Character.AttackDamageMinLeft += Item_data.m_byValue1;
         Character.AttackDamageMaxLeft += Item_data.m_byValue1;
     }
-    if (g_isCharacterBuff((&Hero->Object), eBuff_Hellowin2))
+    if (Hero != nullptr && g_isCharacterBuff((&Hero->Object), eBuff_Hellowin2))
     {
         ITEM_ADD_OPTION Item_data = g_pItemAddOptioninfo->GetItemAddOtioninfo(ITEM_JACK_OLANTERN_WRATH);
         Character.AttackDamageMinRight += Item_data.m_byValue1;
@@ -2797,7 +2852,7 @@ void CHARACTER_MACHINE::CalculateDamage()
         Character.AttackDamageMinLeft += Item_data.m_byValue1;
         Character.AttackDamageMaxLeft += Item_data.m_byValue1;
     }
-    if (g_isCharacterBuff((&Hero->Object), eBuff_CherryBlossom_Petal))
+    if (Hero != nullptr && g_isCharacterBuff((&Hero->Object), eBuff_CherryBlossom_Petal))
     {
         const ITEM_ADD_OPTION& Item_data = g_pItemAddOptioninfo->GetItemAddOtioninfo(ITEM_CHERRY_BLOSSOM_FLOWER_PETAL);
         Character.AttackDamageMinRight += Item_data.m_byValue1;
@@ -2809,7 +2864,7 @@ void CHARACTER_MACHINE::CalculateDamage()
     Character.AttackDamageMaxRight += g_SocketItemMgr.m_StatusBonus.m_iAttackDamageMaxBonus;
     Character.AttackDamageMinLeft += g_SocketItemMgr.m_StatusBonus.m_iAttackDamageMinBonus;
     Character.AttackDamageMaxLeft += g_SocketItemMgr.m_StatusBonus.m_iAttackDamageMaxBonus;
-    if (g_isCharacterBuff((&Hero->Object), eBuff_BlessingOfXmax))	//크리스마스의 축복
+    if (Hero != nullptr && g_isCharacterBuff((&Hero->Object), eBuff_BlessingOfXmax))	//크리스마스의 축복
     {
         int _Temp = 0;
         _Temp = Character.Level / 3 + 45;
@@ -2820,7 +2875,7 @@ void CHARACTER_MACHINE::CalculateDamage()
         Character.AttackDamageMaxLeft += _Temp;
     }
 
-    if (g_isCharacterBuff((&Hero->Object), eBuff_StrengthOfSanta))	//산타의 강화
+    if (Hero != nullptr && g_isCharacterBuff((&Hero->Object), eBuff_StrengthOfSanta))	//산타의 강화
     {
         int _Temp = 30;
 
@@ -2861,10 +2916,14 @@ void CHARACTER_MACHINE::CalculateMagicDamage()
     WORD    DamageMax = 0;
 
     // 날개
-    if (Equipment[EQUIPMENT_WING].Type != -1)
+    if (IsUsableCharacterItem(&Equipment[EQUIPMENT_WING]))
     {
-        ITEM_ATTRIBUTE* p = &ItemAttribute[Equipment[EQUIPMENT_WING].Type];
         ITEM* ipWing = &Equipment[EQUIPMENT_WING];
+        const ITEM_ATTRIBUTE* p = GetCharacterItemAttribute(ipWing);
+        if (p == nullptr)
+        {
+            return;
+        }
         percent = CalcDurabilityPercent(ipWing->Durability, p->Durability, ipWing->Level, 0);//ipWing->Option1);
 
         DamageMin = 0;
@@ -2879,9 +2938,13 @@ void CHARACTER_MACHINE::CalculateMagicDamage()
         Character.MagicDamageMax += DamageMax;
     }
 
-    if (Right->Type != -1 && Right->Durability != 0)
+    if (IsUsableCharacterItem(Right))
     {
-        ITEM_ATTRIBUTE* p = &ItemAttribute[Right->Type];
+        const ITEM_ATTRIBUTE* p = GetCharacterItemAttribute(Right);
+        if (p == nullptr)
+        {
+            return;
+        }
         percent = CalcDurabilityPercent(Right->Durability, p->Durability, Right->Level, Right->ExcellentFlags, Right->AncientDiscriminator);
         DamageMin = 0; DamageMax = 0;
 
@@ -2910,12 +2973,16 @@ void CHARACTER_MACHINE::CalculateMagicDamage()
         PlusSpecialPercent(&Character.MagicDamageMax, AT_IMPROVE_MAGIC_PERCENT, Right, 2);
     }
 
-    if (Left->Type != -1 && Left->Durability != 0)
+    if (IsUsableCharacterItem(Left))
     {
         // CalculateCurseDamage()
         if (CLASS_SUMMONER != gCharacterManager.GetBaseClass(Character.Class))
         {
-            ITEM_ATTRIBUTE* p = &ItemAttribute[Left->Type];
+            const ITEM_ATTRIBUTE* p = GetCharacterItemAttribute(Left);
+            if (p == nullptr)
+            {
+                return;
+            }
             percent = CalcDurabilityPercent(Left->Durability, p->Durability, Left->Level, Left->ExcellentFlags, Left->AncientDiscriminator);
             DamageMin = 0; DamageMax = 0;
 
@@ -2946,15 +3013,19 @@ void CHARACTER_MACHINE::CalculateMagicDamage()
         }
     }
 
-    if (Left->Type != -1 && Left->Durability != 0)
+    if (IsUsableCharacterItem(Left))
     {
         if (CLASS_SUMMONER != gCharacterManager.GetBaseClass(Character.Class))
         {
-            ITEM_ATTRIBUTE* p = &ItemAttribute[Left->Type];
+            const ITEM_ATTRIBUTE* p = GetCharacterItemAttribute(Left);
+            if (p == nullptr)
+            {
+                return;
+            }
             percent = CalcDurabilityPercent(Left->Durability, p->Durability, Left->Level, Left->ExcellentFlags, Left->AncientDiscriminator);
             DamageMin = 0; DamageMax = 0;
 
-            if (Right->Type == ITEM_IMPERIAL_SWORD)
+            if (IsValidCharacterItem(Right) && Right->Type == ITEM_IMPERIAL_SWORD)
             {
                 PlusSpecial(&DamageMin, AT_IMPROVE_DAMAGE, Right);
                 PlusSpecial(&DamageMax, AT_IMPROVE_DAMAGE, Right);
@@ -2979,7 +3050,7 @@ void CHARACTER_MACHINE::CalculateMagicDamage()
         }
     }
 
-    if (Amulet->Type != -1 && Amulet->Durability != 0)
+    if (IsUsableCharacterItem(Amulet))
     {
         PlusSpecial(&Character.MagicDamageMin, AT_IMPROVE_MAGIC_LEVEL, Amulet);
         PlusSpecial(&Character.MagicDamageMax, AT_IMPROVE_MAGIC_LEVEL, Amulet);
@@ -2987,12 +3058,12 @@ void CHARACTER_MACHINE::CalculateMagicDamage()
         PlusSpecialPercent(&Character.MagicDamageMax, AT_IMPROVE_MAGIC_PERCENT, Amulet, 2);
     }
 
-    if (RRing->Type != -1 && RRing->Durability != 0)
+    if (IsUsableCharacterItem(RRing))
     {
         PlusSpecialPercent(&Character.MagicDamageMin, AT_IMPROVE_MAGIC_PERCENT, RRing, RRing->SpecialValue[0]);
         PlusSpecialPercent(&Character.MagicDamageMax, AT_IMPROVE_MAGIC_PERCENT, RRing, RRing->SpecialValue[0]);
     }
-    if (LRing->Type != -1 && LRing->Durability != 0)
+    if (IsUsableCharacterItem(LRing))
     {
         PlusSpecialPercent(&Character.MagicDamageMin, AT_IMPROVE_MAGIC_PERCENT, LRing, LRing->SpecialValue[0]);
         PlusSpecialPercent(&Character.MagicDamageMax, AT_IMPROVE_MAGIC_PERCENT, LRing, LRing->SpecialValue[0]);
@@ -3005,25 +3076,25 @@ void CHARACTER_MACHINE::CalculateMagicDamage()
     Character.MagicDamageMin += MagicDamage;
     Character.MagicDamageMax += MagicDamage;
 
-    if (g_isCharacterBuff((&Hero->Object), eBuff_EliteScroll4))
+    if (Hero != nullptr && g_isCharacterBuff((&Hero->Object), eBuff_EliteScroll4))
     {
         ITEM_ADD_OPTION Item_data = g_pItemAddOptioninfo->GetItemAddOtioninfo(ITEM_POTION + 75);
         Character.MagicDamageMin += Item_data.m_byValue1;
         Character.MagicDamageMax += Item_data.m_byValue1;
     }
-    if (g_isCharacterBuff((&Hero->Object), eBuff_Hellowin2))
+    if (Hero != nullptr && g_isCharacterBuff((&Hero->Object), eBuff_Hellowin2))
     {
         ITEM_ADD_OPTION Item_data = g_pItemAddOptioninfo->GetItemAddOtioninfo(ITEM_JACK_OLANTERN_WRATH);
         Character.MagicDamageMin += Item_data.m_byValue1;
         Character.MagicDamageMax += Item_data.m_byValue1;
     }
-    if (g_isCharacterBuff((&Hero->Object), eBuff_CherryBlossom_Petal))
+    if (Hero != nullptr && g_isCharacterBuff((&Hero->Object), eBuff_CherryBlossom_Petal))
     {
         const ITEM_ADD_OPTION& Item_data = g_pItemAddOptioninfo->GetItemAddOtioninfo(ITEM_CHERRY_BLOSSOM_FLOWER_PETAL);
         Character.MagicDamageMin += Item_data.m_byValue1;
         Character.MagicDamageMax += Item_data.m_byValue1;
     }
-    if (g_isCharacterBuff((&Hero->Object), eBuff_SwellOfMagicPower))
+    if (Hero != nullptr && g_isCharacterBuff((&Hero->Object), eBuff_SwellOfMagicPower))
     {
         int iAdd_MP = (CharacterAttribute->Energy / 9) * 0.2f;
         Character.MagicDamageMin += iAdd_MP;
@@ -3033,7 +3104,7 @@ void CHARACTER_MACHINE::CalculateMagicDamage()
     Character.MagicDamageMin += g_SocketItemMgr.m_StatusBonus.m_iMagicPowerBonus;
     Character.MagicDamageMax += g_SocketItemMgr.m_StatusBonus.m_iMagicPowerBonus;
 
-    if (g_isCharacterBuff((&Hero->Object), eBuff_StrengthOfSanta))
+    if (Hero != nullptr && g_isCharacterBuff((&Hero->Object), eBuff_StrengthOfSanta))
     {
         int _Temp = 30;
 
@@ -3052,9 +3123,13 @@ void CHARACTER_MACHINE::CalculateCurseDamage()
     Character.CurseDamageMax = wEnergy / 4;
 
     ITEM* pEquipWing = &Equipment[EQUIPMENT_WING];
-    if (pEquipWing->Type != -1)
+    if (IsUsableCharacterItem(pEquipWing))
     {
-        ITEM_ATTRIBUTE* pAttribute = &ItemAttribute[pEquipWing->Type];
+        const ITEM_ATTRIBUTE* pAttribute = GetCharacterItemAttribute(pEquipWing);
+        if (pAttribute == nullptr)
+        {
+            return;
+        }
         WORD wDamageMin = 0;
         WORD wDamageMax = 0;
 
@@ -3071,9 +3146,13 @@ void CHARACTER_MACHINE::CalculateCurseDamage()
     }
 
     ITEM* pEquipLeft = &Equipment[EQUIPMENT_WEAPON_LEFT];
-    if (pEquipLeft->Type != -1 && pEquipLeft->Durability != 0)
+    if (IsUsableCharacterItem(pEquipLeft))
     {
-        ITEM_ATTRIBUTE* pAttribute = &ItemAttribute[pEquipLeft->Type];
+        const ITEM_ATTRIBUTE* pAttribute = GetCharacterItemAttribute(pEquipLeft);
+        if (pAttribute == nullptr)
+        {
+            return;
+        }
         WORD wDamageMin = 0;
         WORD wDamageMax = 0;
 
@@ -3093,7 +3172,7 @@ void CHARACTER_MACHINE::CalculateCurseDamage()
         PlusSpecialPercent(&Character.CurseDamageMax, AT_IMPROVE_MAGIC_PERCENT, pEquipLeft, 2);
     }
 
-    if (g_isCharacterBuff((&Hero->Object), eBuff_StrengthOfSanta))
+    if (Hero != nullptr && g_isCharacterBuff((&Hero->Object), eBuff_StrengthOfSanta))
     {
         int _Temp = 30;
 
@@ -3217,9 +3296,13 @@ void CHARACTER_MACHINE::CalculateSuccessfulBlocking()
     }
 
     ITEM* Left = &Equipment[EQUIPMENT_WEAPON_LEFT];
-    if (Left->Type != -1 && Left->Durability != 0)
+    if (IsUsableCharacterItem(Left))
     {
-        ITEM_ATTRIBUTE* p = &ItemAttribute[Left->Type];
+        const ITEM_ATTRIBUTE* p = GetCharacterItemAttribute(Left);
+        if (p == nullptr)
+        {
+            return;
+        }
         float percent = CalcDurabilityPercent(Left->Durability, p->Durability, Left->Level, Left->ExcellentFlags, Left->AncientDiscriminator);
 
         WORD SuccessBlocking = Left->SuccessfulBlocking - (WORD)(Left->SuccessfulBlocking * percent);
@@ -3282,11 +3365,15 @@ void CHARACTER_MACHINE::CalculateDefense()
     WORD    Defense = 0;
     for (int i = EQUIPMENT_WEAPON_LEFT; i <= EQUIPMENT_WING; ++i)
     {
-        if (Equipment[i].Durability != 0)
+        if (IsUsableCharacterItem(&Equipment[i]))
         {
             WORD defense = ItemDefense(&Equipment[i]);
 
-            ITEM_ATTRIBUTE* p = &ItemAttribute[Equipment[i].Type];
+            const ITEM_ATTRIBUTE* p = GetCharacterItemAttribute(&Equipment[i]);
+            if (p == nullptr)
+            {
+                continue;
+            }
             float percent;
             if (i == EQUIPMENT_WING)
             {
@@ -3331,17 +3418,17 @@ void CHARACTER_MACHINE::CalculateDefense()
         Character.Defense += (WORD)(Character.Defense * addDefense);
     }
 
-    if (g_isCharacterBuff((&Hero->Object), eBuff_EliteScroll2))
+    if (Hero != nullptr && g_isCharacterBuff((&Hero->Object), eBuff_EliteScroll2))
     {
         const ITEM_ADD_OPTION& Item_data = g_pItemAddOptioninfo->GetItemAddOtioninfo(ITEM_POTION + 73);
         Character.Defense += (WORD)Item_data.m_byValue1;
     }
-    if (g_isCharacterBuff((&Hero->Object), eBuff_Hellowin3))
+    if (Hero != nullptr && g_isCharacterBuff((&Hero->Object), eBuff_Hellowin3))
     {
         ITEM_ADD_OPTION Item_data = g_pItemAddOptioninfo->GetItemAddOtioninfo(ITEM_JACK_OLANTERN_CRY);
         Character.Defense += (WORD)Item_data.m_byValue1;
     }
-    if (g_isCharacterBuff((&Hero->Object), eBuff_BlessingOfXmax))
+    if (Hero != nullptr && g_isCharacterBuff((&Hero->Object), eBuff_BlessingOfXmax))
     {
         int _Temp = 0;
         _Temp = Character.Level / 5 + 50;
@@ -3349,7 +3436,7 @@ void CHARACTER_MACHINE::CalculateDefense()
         Character.Defense += _Temp;
     }
 
-    if (g_isCharacterBuff((&Hero->Object), eBuff_DefenseOfSanta))
+    if (Hero != nullptr && g_isCharacterBuff((&Hero->Object), eBuff_DefenseOfSanta))
     {
         int _Temp = 100;
         Character.Defense += _Temp;
@@ -3359,20 +3446,23 @@ void CHARACTER_MACHINE::CalculateDefense()
     g_csItemOption.PlusSpecialLevel(&Character.Defense, Dexterity, AT_SET_OPTION_IMPROVE_DEFENCE_3);
     g_csItemOption.PlusSpecialLevel(&Character.Defense, Vitality, AT_SET_OPTION_IMPROVE_DEFENCE_4);
 
-    if (Equipment[EQUIPMENT_WEAPON_LEFT].Type >= ITEM_SHIELD && Equipment[EQUIPMENT_WEAPON_LEFT].Type < ITEM_SHIELD + MAX_ITEM_INDEX)
+    if (IsValidCharacterItem(&Equipment[EQUIPMENT_WEAPON_LEFT])
+        && Equipment[EQUIPMENT_WEAPON_LEFT].Type >= ITEM_SHIELD
+        && Equipment[EQUIPMENT_WEAPON_LEFT].Type < ITEM_SHIELD + MAX_ITEM_INDEX)
     {
         g_csItemOption.PlusSpecialPercent(&Character.Defense, AT_SET_OPTION_IMPROVE_SHIELD_DEFENCE);
     }
 
     PlusSpecial(&Character.Defense, AT_SET_OPTION_IMPROVE_DEFENCE, &Equipment[EQUIPMENT_HELPER]);
-    if (Equipment[EQUIPMENT_WING].Type == ITEM_CAPE_OF_LORD || Equipment[EQUIPMENT_WING].Type == ITEM_CAPE_OF_FIGHTER)
+    if (IsValidCharacterItem(&Equipment[EQUIPMENT_WING])
+        && (Equipment[EQUIPMENT_WING].Type == ITEM_CAPE_OF_LORD || Equipment[EQUIPMENT_WING].Type == ITEM_CAPE_OF_FIGHTER))
     {
         PlusSpecial(&Character.Defense, AT_SET_OPTION_IMPROVE_DEFENCE, &Equipment[EQUIPMENT_WING]);
     }
 
     Character.Defense += g_SocketItemMgr.m_StatusBonus.m_iDefenceBonus;
 
-    if (Equipment[EQUIPMENT_WEAPON_LEFT].Type != -1 && Equipment[EQUIPMENT_WEAPON_LEFT].Durability != 0)
+    if (IsUsableCharacterItem(&Equipment[EQUIPMENT_WEAPON_LEFT]))
     {
         Character.Defense += Equipment[EQUIPMENT_WEAPON_LEFT].Defense * g_SocketItemMgr.m_StatusBonus.m_iShieldDefenceBonus * 0.01f;
     }
@@ -3382,7 +3472,7 @@ void CHARACTER_MACHINE::CalculateMagicDefense()
 {
     for (int i = EQUIPMENT_HELM; i <= EQUIPMENT_WING; ++i)
     {
-        if (Equipment[i].Durability != 0)
+        if (IsUsableCharacterItem(&Equipment[i]))
         {
             Character.MagicDefense = ItemMagicDefense(&Equipment[i]);
         }
@@ -3391,12 +3481,12 @@ void CHARACTER_MACHINE::CalculateMagicDefense()
 
 void CHARACTER_MACHINE::CalculateWalkSpeed()
 {
-    if (Equipment[EQUIPMENT_BOOTS].Durability != 0)
+    if (IsUsableCharacterItem(&Equipment[EQUIPMENT_BOOTS]))
     {
         Character.WalkSpeed = ItemWalkSpeed(&Equipment[EQUIPMENT_BOOTS]);
     }
 
-    if (Equipment[EQUIPMENT_WING].Durability != 0)
+    if (IsUsableCharacterItem(&Equipment[EQUIPMENT_WING]))
     {
         Character.WalkSpeed += ItemWalkSpeed(&Equipment[EQUIPMENT_WING]);
     }
@@ -3461,6 +3551,11 @@ bool CHARACTER_MACHINE::IsZeroDurability()
 
 void CHARACTER_MACHINE::CalculateBasicState()
 {
+    if (Hero == nullptr)
+    {
+        return;
+    }
+
     if (g_isCharacterBuff((&Hero->Object), eBuff_SecretPotion1))
     {
         auto Item_data = g_pItemAddOptioninfo->GetItemAddOtioninfo(ITEM_POTION + 78);
@@ -3502,6 +3597,11 @@ void CHARACTER_MACHINE::CalculateBasicState()
 
 void CHARACTER_MACHINE::getAllAddStateOnlyExValues(int& iAddStrengthExValues, int& iAddDexterityExValues, int& iAddVitalityExValues, int& iAddEnergyExValues, int& iAddCharismaExValues)
 {
+    if (Hero == nullptr)
+    {
+        return;
+    }
+
     if (g_isCharacterBuff((&Hero->Object), eBuff_SecretPotion1))
     {
         ITEM_ADD_OPTION Item_data = g_pItemAddOptioninfo->GetItemAddOtioninfo(ITEM_POTION + 78);

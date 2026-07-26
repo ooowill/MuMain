@@ -23,6 +23,45 @@ using namespace SEASON3B;
 
 namespace
 {
+    constexpr DWORD kInvalidResourceValue = static_cast<DWORD>(-1);
+    constexpr DWORD kMaxRenderableResourceValue = 0x7fffffff;
+
+    DWORD NormalizeResourceMax(DWORD preferredMax, DWORD fallbackMax = 0)
+    {
+        const auto sanitize = [](DWORD value) -> DWORD
+        {
+            if (value == 0 || value == kInvalidResourceValue)
+            {
+                return 0;
+            }
+
+            return value > kMaxRenderableResourceValue ? kMaxRenderableResourceValue : value;
+        };
+
+        const DWORD preferred = sanitize(preferredMax);
+        return preferred > 0 ? preferred : sanitize(fallbackMax);
+    }
+
+    DWORD NormalizeResourceCurrent(DWORD currentValue, DWORD maxValue)
+    {
+        if (maxValue == 0)
+        {
+            return 0;
+        }
+
+        if (currentValue == kInvalidResourceValue || currentValue > kMaxRenderableResourceValue)
+        {
+            return maxValue;
+        }
+
+        return currentValue > maxValue ? maxValue : currentValue;
+    }
+
+    int ToRenderableResourceNumber(DWORD value)
+    {
+        return static_cast<int>(value > kMaxRenderableResourceValue ? kMaxRenderableResourceValue : value);
+    }
+
     float GetMasterSkillValue(ActionSkillType skill)
     {
         return CharacterAttribute->MasterSkillInfo[skill].GetSkillValue();
@@ -1122,14 +1161,17 @@ void SEASON3B::CNewUICharacterInfoWindow::RenderAttribute()
 
     g_pRenderText->SetFont(g_hFont);
 
+    DWORD lifeMax = 0;
     if (gCharacterManager.IsMasterLevel(Hero->Class) == true)
     {
-        mu_swprintf(strVitality, I18N::Game::HPDD, CharacterAttribute->Life, Master_Level_Data.wMaxLife);
+        lifeMax = NormalizeResourceMax(Master_Level_Data.wMaxLife, CharacterAttribute->LifeMax);
     }
     else
     {
-        mu_swprintf(strVitality, I18N::Game::HPDD, CharacterAttribute->Life, CharacterAttribute->LifeMax);
+        lifeMax = NormalizeResourceMax(CharacterAttribute->LifeMax, Master_Level_Data.wMaxLife);
     }
+    const DWORD life = NormalizeResourceCurrent(CharacterAttribute->Life, lifeMax);
+    mu_swprintf(strVitality, I18N::Game::HPDD, ToRenderableResourceNumber(life), ToRenderableResourceNumber(lifeMax));
     g_pRenderText->SetTextColor(255, 255, 255, 255);
 
     if (g_isCharacterBuff((&Hero->Object), eBuff_Hellowin4))

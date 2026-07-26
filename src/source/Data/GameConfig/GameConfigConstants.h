@@ -9,6 +9,7 @@ namespace CfgSections
     inline constexpr wchar_t CfgSectionLogin[]      = L"LOGIN";
     inline constexpr wchar_t CfgSectionConnectionSettings[] = L"CONNECTION SETTINGS";
     inline constexpr wchar_t CfgSectionCamera[] = L"Camera";
+    inline constexpr wchar_t CfgSectionGamePerformance[] = L"Game Performance";
 }
 
 namespace CfgKeys
@@ -37,6 +38,14 @@ namespace CfgKeys
 
     // Camera
     inline constexpr wchar_t CfgKeyZoom[] = L"Zoom";
+
+    // Game Performance
+    inline constexpr wchar_t CfgKeyHideWorldObjects[] = L"HideWorldObjects";
+    inline constexpr wchar_t CfgKeyDisableHeavyEffects[] = L"DisableHeavyEffects";
+    inline constexpr wchar_t CfgKeyReduceCharacterGlow[] = L"ReduceCharacterGlow";
+    inline constexpr wchar_t CfgKeyHideWings[] = L"HideWings";
+    inline constexpr wchar_t CfgKeyHideMountsPets[] = L"HideMountsPets";
+    inline constexpr wchar_t CfgKeySimplifyOtherPlayers[] = L"SimplifyOtherPlayers";
 }
 
 namespace CfgDefaults
@@ -60,4 +69,11 @@ namespace CfgDefaults
 
     // I18N locale code; "en" is the default the resx generator falls back to.
     inline constexpr wchar_t CfgDefaultUILocale[] = L"en";
+
+    inline constexpr bool CfgDefaultHideWorldObjects = false;
+    inline constexpr bool CfgDefaultDisableHeavyEffects = false;
+    inline constexpr bool CfgDefaultReduceCharacterGlow = false;
+    inline constexpr bool CfgDefaultHideWings = false;
+    inline constexpr bool CfgDefaultHideMountsPets = false;
+    inline constexpr bool CfgDefaultSimplifyOtherPlayers = false;
 }

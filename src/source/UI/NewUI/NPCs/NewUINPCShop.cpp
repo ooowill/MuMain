@@ -9,6 +9,7 @@
 #include "UI/NewUI/NewUISystem.h"
 #include "UI/NewUI/Dialogs/NewUICommonMessageBox.h"
 #include "Engine/Object/ZzzInventory.h"
+#include "Character/AzothClient.h"
 
 #include "GameLogic/Social/GambleSystem.h"
 
@@ -406,6 +407,7 @@ bool SEASON3B::CNewUINPCShop::BtnProcess()
 
 void SEASON3B::CNewUINPCShop::DeleteAllItems()
 {
+    AzothClient::ClearNpcShopPrices();
     if (m_pNewInventoryCtrl)
         m_pNewInventoryCtrl->RemoveAllItems();
 }
@@ -425,6 +427,7 @@ void SEASON3B::CNewUINPCShop::OpenningProcess()
 void SEASON3B::CNewUINPCShop::ClosingProcess()
 {
     SocketClient->ToGameServer()->SendCloseNpcRequest();
+    AzothClient::ClearNpcShopPrices();
 
     m_dwShopState = SHOP_STATE_BUYNSELL;
     m_iTaxRate = 0;
@@ -486,6 +489,22 @@ DWORD SEASON3B::CNewUINPCShop::GetShopState()
 int SEASON3B::CNewUINPCShop::GetPointedItemIndex()
 {
     return m_pNewInventoryCtrl->GetPointedSquareIndex();
+}
+
+int SEASON3B::CNewUINPCShop::GetPointedItemSlot()
+{
+    if (m_pNewInventoryCtrl == nullptr)
+    {
+        return -1;
+    }
+
+    ITEM* pointedItem = m_pNewInventoryCtrl->FindItemPointedSquareIndex();
+    if (pointedItem == nullptr)
+    {
+        return m_pNewInventoryCtrl->GetPointedSquareIndex();
+    }
+
+    return m_pNewInventoryCtrl->GetIndexByItem(pointedItem);
 }
 
 void SEASON3B::CNewUINPCShop::SetStandbyItemKey(DWORD dwItemKey)

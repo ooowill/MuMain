@@ -22,6 +22,34 @@ constexpr int MAX_HEX_LINE_BYTES = 512;
 
 void DeleteSocket();
 
+namespace
+{
+void WriteOpenGLString(CErrorReport& report, const wchar_t* label, GLenum name)
+{
+    const GLubyte* value = glGetString(name);
+    if (value == nullptr)
+    {
+        report.Write(L"%ls\t\t: (unavailable)\r\n", label);
+        return;
+    }
+
+    wchar_t wideValue[256] = { 0 };
+    int converted = MultiByteToWideChar(CP_UTF8, 0, reinterpret_cast<const char*>(value), -1, wideValue, _countof(wideValue));
+    if (converted <= 0)
+    {
+        converted = MultiByteToWideChar(CP_ACP, 0, reinterpret_cast<const char*>(value), -1, wideValue, _countof(wideValue));
+    }
+
+    if (converted <= 0)
+    {
+        report.Write(L"%ls\t\t: (conversion failed)\r\n", label);
+        return;
+    }
+
+    report.Write(L"%ls\t\t: %ls\r\n", label, wideValue);
+}
+}
+
 CErrorReport::CErrorReport()
 {
     Clear();
@@ -219,9 +247,9 @@ void CErrorReport::WriteSystemInfo(ER_SystemInfo* si)
 void CErrorReport::WriteOpenGLInfo(void)
 {
     Write(L"<OpenGL information>\r\n");
-    Write(L"Vendor\t\t: %ls\r\n", (wchar_t*)glGetString(GL_VENDOR));
-    Write(L"Render\t\t: %ls\r\n", (wchar_t*)glGetString(GL_RENDERER));
-    Write(L"OpenGL version\t: %ls\r\n", (wchar_t*)glGetString(GL_VERSION));
+    WriteOpenGLString(*this, L"Vendor", GL_VENDOR);
+    WriteOpenGLString(*this, L"Render", GL_RENDERER);
+    WriteOpenGLString(*this, L"OpenGL version", GL_VERSION);
     GLint iResult[2];
     glGetIntegerv(GL_MAX_TEXTURE_SIZE, iResult);
     Write(L"Max Texture size\t: %d x %d\r\n", iResult[0], iResult[0]);

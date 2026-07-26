@@ -2,6 +2,7 @@
 //////////////////////////////////////////////////////////////////////
 
 #include "stdafx.h"
+#include <algorithm>
 #include "UI/Chat/Chat.h"
 
 #include "UI/NewUI/Party/NewUIPartyListWindow.h"
@@ -275,7 +276,7 @@ bool CNewUIPartyListWindow::Render()
             g_pRenderText->RenderText(m_Pos.x + 4, m_Pos.y + 4 + iVal, Party[i].Name, m_iLimitUserIDHeight[1], 0, RT3_SORT_LEFT);
         }
 
-        int iStepHP = std::min<int>(10, Party[i].stepHP);
+        int iStepHP = std::clamp<int>(Party[i].stepHP, 0, 10);
         float fLife = ((float)iStepHP / (float)10) * (float)PARTY_LIST_HP_BAR_WIDTH;
         RenderImage(IMAGE_PARTY_LIST_HPBAR, m_Pos.x + 4, m_Pos.y + 16 + iVal, fLife, 3);
 
@@ -319,7 +320,8 @@ void SEASON3B::CNewUIPartyListWindow::RenderPartyHPOnHead()
 
         if ((MouseX >= ScreenX && MouseX < ScreenX + Width && MouseY >= ScreenY - 2 && MouseY < ScreenY + 6))
         {
-            mu_swprintf(Text, L"HP : %d0%%", p->stepHP);
+            const int tooltipStepHP = std::clamp<int>(p->stepHP, 0, 10);
+            mu_swprintf(Text, L"HP : %d0%%", tooltipStepHP);
             g_pRenderText->SetTextColor(255, 230, 210, 255);
             g_pRenderText->RenderText(ScreenX, ScreenY - 6, Text);
         }
@@ -335,7 +337,7 @@ void SEASON3B::CNewUIPartyListWindow::RenderPartyHPOnHead()
         glColor3f(50.f / 255.f, 10 / 255.f, 0.f);
         RenderColor((float)(ScreenX + 2), (float)(ScreenY + 2), Width, 1.f);
 
-        int stepHP = std::min<int>(10, p->stepHP);
+        int stepHP = std::clamp<int>(p->stepHP, 0, 10);
 
         glColor3f(250.f / 255.f, 10 / 255.f, 0.f);
         for (int k = 0; k < stepHP; ++k)

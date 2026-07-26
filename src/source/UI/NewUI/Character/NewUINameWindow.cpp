@@ -4,6 +4,7 @@
 
 #include "stdafx.h"
 #include "UI/Chat/Chat.h"
+#include "Character/AccountCompanionClient.h"
 #include "UI/NewUI/Character/NewUINameWindow.h"
 #include "Render/Models/ZzzBMD.h"
 #include "Engine/Object/ZzzObject.h"
@@ -173,6 +174,11 @@ void SEASON3B::CNewUINameWindow::RenderName()
         {
             CHARACTER* c = &CharactersClient[i];
             OBJECT* o = &c->Object;
+            if (AccountCompanionClient::ShouldSuppressServerDrivenRender(i))
+            {
+                continue;
+            }
+
             if (o->Live && o->Kind == KIND_PLAYER)
             {
                 if (IsShopTitleVisible(c) == false)
@@ -192,6 +198,16 @@ void SEASON3B::CNewUINameWindow::RenderName()
 
     if (SelectedItem != -1 || SelectedNpc != -1 || SelectedCharacter != -1)
     {
+        if (SelectedNpc != -1 && AccountCompanionClient::ShouldSuppressServerDrivenRender(SelectedNpc))
+        {
+            SelectedNpc = -1;
+        }
+
+        if (SelectedCharacter != -1 && AccountCompanionClient::ShouldSuppressServerDrivenRender(SelectedCharacter))
+        {
+            SelectedCharacter = -1;
+        }
+
         if (SelectedNpc != -1)
         {
             CHARACTER* c = &CharactersClient[SelectedNpc];

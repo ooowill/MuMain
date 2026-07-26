@@ -38,11 +38,14 @@ public:
 
     int GetServerGroupSize();
 
-    void SetSelectServerInfo(wchar_t* pszName, int iIndex, BYTE byNonPvP);
+    void SetSelectServerInfo(wchar_t* pszName, int iIndex, int iConnectIndex, BYTE byNonPvP);
     wchar_t* GetSelectServerName();
     int	GetSelectServerIndex();
+    int GetSelectConnectIndex();
     BYTE GetNonPVPInfo();
     bool IsNonPvP();
+    bool IsSelectedPvpServer();
+    bool IsSelectedWarServer();
     void SetTotalServer(int iTotalServer);
     int GetTotalServer();
 
@@ -58,6 +61,7 @@ public:
     int				m_iTotalServer;
     wchar_t m_szSelectServerName[MAX_TEXT_LENGTH];
     int				m_iSelectServerIndex;
+    int				m_iSelectConnectIndex;
     BYTE			m_byNonPvP;
 
 protected:

@@ -70,7 +70,10 @@ bool SEASON3B::CNewUIMiniMap::Create(CNewUIManager* pNewUIMng, int x, int y)
 
 void SEASON3B::CNewUIMiniMap::ClosingProcess()
 {
-    SocketClient->ToGameServer()->SendCloseNpcRequest();
+    if (SocketClient != nullptr && SocketClient->ToGameServer() != nullptr)
+    {
+        SocketClient->ToGameServer()->SendCloseNpcRequest();
+    }
 }
 
 float SEASON3B::CNewUIMiniMap::GetLayerDepth()
@@ -239,19 +242,19 @@ void SEASON3B::CNewUIMiniMap::LoadImages(const wchar_t* Filename)
     {
         int Size = sizeof(MINI_MAP_FILE);
         BYTE* Buffer = new BYTE[Size * MAX_MINI_MAP_DATA + 45];
-        fread(Buffer, (Size * MAX_MINI_MAP_DATA) + 45, 1, fp);
+        const size_t miniMapDataSize = (Size * MAX_MINI_MAP_DATA) + 45;
+        const size_t readCount = fread(Buffer, miniMapDataSize, 1, fp);
 
         DWORD dwCheckSum;
-        fread(&dwCheckSum, sizeof(DWORD), 1, fp);
+        const size_t checksumReadCount = fread(&dwCheckSum, sizeof(DWORD), 1, fp);
         fclose(fp);
 
-        if (dwCheckSum != GenerateCheckSum2(Buffer, (Size * MAX_MINI_MAP_DATA) + 45, 0x2BC1))
+        if (readCount != 1 || checksumReadCount != 1 || dwCheckSum != GenerateCheckSum2(Buffer, miniMapDataSize, 0x2BC1))
         {
             wchar_t Text[256];
             mu_swprintf(Text, L"%ls - File corrupted.", Fname);
             g_ErrorReport.Write(Text);
-            MessageBox(g_hWnd, Text, NULL, MB_OK);
-            SendMessage(g_hWnd, WM_DESTROY, 0, 0);
+            m_bSuccess = false;
         }
         else
         {

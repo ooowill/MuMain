@@ -9,16 +9,16 @@
 // See CameraMove.cpp for details.
 namespace LoginSceneCameraDefaults
 {
-    constexpr float OFFSET_X = -300.0f;
+    constexpr float OFFSET_X = -500.0f;
     constexpr float OFFSET_Y =  650.0f;
-    constexpr float OFFSET_Z =  950.0f;
-    constexpr float ANGLE_PITCH = 40.0f;
-    constexpr float ANGLE_YAW   = -5.0f;
+    constexpr float OFFSET_Z =  650.0f;
+    constexpr float ANGLE_PITCH = 22.0f;
+    constexpr float ANGLE_YAW   = 0.0f;
 
     // Default render distances for LoginScene (tour camera).
     // DevEditor exposes these as sliders; release builds use these as fixed values.
-    constexpr float RENDER_TERRAIN_DIST = 3995.0f;
-    constexpr float RENDER_OBJECT_DIST  = 5903.0f;
+    constexpr float RENDER_TERRAIN_DIST = 16000.0f;
+    constexpr float RENDER_OBJECT_DIST  = 15000.0f;
 }
 
 // Runtime-adjustable offsets (initially set to the defaults above)

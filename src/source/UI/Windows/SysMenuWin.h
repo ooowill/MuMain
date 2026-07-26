@@ -1,6 +1,6 @@
 #pragma once
 
-#include "UI/Widgets/WinEx.h"
+#include "UI/Widgets/Win.h"
 #include "UI/Widgets/Button.h"
 
 #define	SMW_BTN_GAME_END	0
@@ -12,7 +12,7 @@
 class CSysMenuWin : public CWin
 {
 protected:
-    CWinEx		m_winBack;
+    CWin m_winBack;
     CButton		m_aBtn[SMW_BTN_MAX];
 
 public:

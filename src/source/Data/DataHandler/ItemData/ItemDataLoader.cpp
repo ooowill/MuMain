@@ -18,6 +18,56 @@
 // External references
 extern ITEM_ATTRIBUTE* ItemAttribute;
 
+namespace
+{
+    struct CustomJewelDefinition
+    {
+        int Number;
+        const wchar_t* Name;
+    };
+
+    constexpr CustomJewelDefinition CustomJewels[] =
+    {
+        { 200, L"Jewel of Grade VI" },
+        { 201, L"Jewel of Grade IX" },
+        { 202, L"Jewel of Greater Option" },
+        { 203, L"Jewel of Excellent Change" },
+        { 204, L"Jewel of Luck" },
+        { 205, L"Jewel of Skill" },
+        { 206, L"Jewel of Grade XV" },
+        { 207, L"Jewel of Full" },
+        { 208, L"Jewel of Socket" },
+        { 209, L"Jewel of Armored" },
+        { 210, L"Jewel of Ancient" },
+        { 211, L"Jewel of Excellent" },
+    };
+
+    void ApplyCustomJewelAttributes()
+    {
+        const int soulIndex = ITEM_POTION + 14;
+        if (soulIndex < 0 || soulIndex >= MAX_ITEM)
+        {
+            return;
+        }
+
+        for (const auto& jewel : CustomJewels)
+        {
+            const int index = ITEM_POTION + jewel.Number;
+            if (index < 0 || index >= MAX_ITEM)
+            {
+                continue;
+            }
+
+            ItemAttribute[index] = ItemAttribute[soulIndex];
+            wcsncpy(ItemAttribute[index].Name, jewel.Name, MAX_ITEM_NAME - 1);
+            ItemAttribute[index].Name[MAX_ITEM_NAME - 1] = L'\0';
+            ItemAttribute[index].Width = 1;
+            ItemAttribute[index].Height = 1;
+            ItemAttribute[index].Durability = 1;
+        }
+    }
+}
+
 bool ItemDataLoader::Load(wchar_t* fileName)
 {
     FILE* fp = _wfopen(fileName, L"rb");
@@ -59,6 +109,11 @@ bool ItemDataLoader::Load(wchar_t* fileName)
     }
 
     fclose(fp);
+
+    if (success)
+    {
+        ApplyCustomJewelAttributes();
+    }
 
 #ifdef _EDITOR
     if (success)

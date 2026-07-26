@@ -22,6 +22,7 @@
 #include "Network/Server/WSclient.h"
 #include "Core/Utilities/Log/muConsoleDebug.h"
 #include "I18N/All.h"
+#include "Character/AccountCharacterList.h"
 #include "Engine/Object/ZzzCharacter.h"
 #include "UI/Legacy/UIControls.h"
 #include "SceneCommon.h"
@@ -40,6 +41,7 @@ extern double WorldTime;
 extern HFONT g_hFont;
 extern wchar_t m_ExeVersion[11];
 extern HWND g_hWnd;
+extern GLfloat FogColor[4];
 
 #ifdef _EDITOR
 extern "C" float DevEditor_GetLoginTerrainDist();
@@ -49,6 +51,35 @@ extern "C" float DevEditor_GetLoginTerrainDist();
 // LoginScene Camera State (local to this file)
 //=============================================================================
 namespace {
+
+constexpr float LOGIN_WORLD_HERO_POSITION[3] = {
+    21979.001953f,
+    10078.375000f,
+    178.539886f,
+};
+constexpr float LOGIN_WORLD_CAMERA_POSITION[3] = {
+    24475.796875f,
+    7581.581055f,
+    1834.539917f,
+};
+constexpr float LOGIN_WORLD_CAMERA_ANGLE[3] = {
+    -84.5f,
+    0.0f,
+    -45.0f,
+};
+constexpr float LOGIN_WORLD_CAMERA_FOV = 33.0f;
+
+constexpr float CHARACTER_WORLD_CAMERA_POSITION[3] = {
+    15215.088867f,
+    12186.536133f,
+    529.371704f,
+};
+constexpr float CHARACTER_WORLD_CAMERA_ANGLE[3] = {
+    -84.5f,
+    0.0f,
+    -80.0f,
+};
+constexpr float CHARACTER_WORLD_CAMERA_FOV = 35.0f;
 
 struct LoginCameraState {
     int walkCut = 0;
@@ -100,7 +131,7 @@ int GetLoginCameraWalkCut() {
 
 void DeleteCharacter()
 {
-    if (SelectedHero < 0 || SelectedHero >= MAX_CHARACTERS_PER_ACCOUNT)
+    if (SelectedHero < 0 || SelectedHero >= AccountCharacterList::NativeVisibleSlots)
     {
         return;
     }
@@ -251,23 +282,17 @@ static void InterpolateCameraMovement()
  */
 void MoveCamera()
 {
-    if (CCameraMove::GetInstancePtr()->IsTourMode())
+    if (gMapManager.WorldActive == WD_74NEW_CHARACTER_SCENE)
     {
+        VectorCopy(CHARACTER_WORLD_CAMERA_POSITION, g_Camera.Position);
+        VectorCopy(CHARACTER_WORLD_CAMERA_ANGLE, g_Camera.Angle);
+        g_Camera.FOV = CHARACTER_WORLD_CAMERA_FOV;
         return;
     }
 
-    if (g_loginCamera.currentCount == -1)
-    {
-        InitializeLoginCamera();
-    }
-
-    UpdateCameraWaypoint();
-    InterpolateCameraMovement();
-
-    g_Camera.FOV = 45.f;
-    vec3_t Position;
-    Vector(0.f, 0.f, 0.f, Position);
-    MoveCharacterCamera(Position, g_loginCamera.currentPosition, g_loginCamera.currentAngle);
+    VectorCopy(LOGIN_WORLD_CAMERA_POSITION, g_Camera.Position);
+    VectorCopy(LOGIN_WORLD_CAMERA_ANGLE, g_Camera.Angle);
+    g_Camera.FOV = LOGIN_WORLD_CAMERA_FOV;
 }
 
 void CreateLogInScene()
@@ -276,6 +301,11 @@ void CreateLogInScene()
     gMapManager.WorldActive = WD_73NEW_LOGIN_SCENE;
 
     gMapManager.LoadWorld(gMapManager.WorldActive);
+
+    if (Hero != nullptr)
+    {
+        VectorCopy(LOGIN_WORLD_HERO_POSITION, Hero->Object.Position);
+    }
 
     OpenLogoSceneData();
 
@@ -301,12 +331,8 @@ void CreateLogInScene()
     InputNumber = 2;
     InputTextHide[1] = 1;
 
-    // FIX: Enable tour mode with offset correction
-    // Tour mode waypoints work well for movement, but need position offset
-    // Offset is applied in CCameraMove::GetCurrentCameraPos()
-    CCameraMove::GetInstancePtr()->PlayCameraWalk(Hero->Object.Position, 1000);
-    CCameraMove::GetInstancePtr()->SetTourMode(TRUE, FALSE, 0);  // Start from waypoint 0
-
+    CCameraMove::GetInstancePtr()->SetTourMode(FALSE);
+    MoveCamera();
     MoveMainCamera();
 
     g_fMULogoAlpha = 0;
@@ -323,6 +349,8 @@ void NewMoveLogInScene()
         InitLogIn = true;
         CreateLogInScene();
     }
+
+    ApplyPendingServerListUi();
 
     if (!CUIMng::Instance().m_CreditWin.IsShow())
     {
@@ -357,7 +385,7 @@ void NewMoveLogInScene()
 
         SceneFlag = CHARACTER_SCENE;
         CurrentProtocolState = REQUEST_CHARACTERS_LIST;
-        SocketClient->ToGameServer()->SendRequestCharacterList(g_pMultiLanguage->GetLanguage());
+        SendInitialCharacterListRequest();
     }
 
     g_ConsoleDebug->UpdateMainScene();
@@ -387,7 +415,15 @@ bool NewRenderLogInScene(HDC hDC)
 
     Height = REFERENCE_HEIGHT;
     Width = GetScreenWidth();
-    glClearColor(0.f, 0.f, 0.f, 1.f);
+    constexpr float skyRed = 0.02f;
+    constexpr float skyGreen = 0.02f;
+    constexpr float skyBlue = 0.07f;
+    FogColor[0] = skyRed;
+    FogColor[1] = skyGreen;
+    FogColor[2] = skyBlue;
+    FogColor[3] = 1.0f;
+    glClearColor(skyRed, skyGreen, skyBlue, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     // Set ViewFar BEFORE BeginOpengl so the projection matrix covers the full render distance
 #ifdef _EDITOR
@@ -397,7 +433,7 @@ bool NewRenderLogInScene(HDC hDC)
 #endif
     g_Camera.ViewNear = 100.f;  // Push near plane out to preserve z-buffer precision
 
-    BeginOpengl(0, 25, REFERENCE_WIDTH, 430);
+    BeginOpengl(0, 0, REFERENCE_WIDTH, REFERENCE_HEIGHT);
 
     // LoginScene doesn't call CreateFrustrum (DefaultCamera tour mode angles differ from
     // legacy hardcoded values). Instead, TestFrustrum2D is bypassed for LOG_IN_SCENE and
@@ -426,7 +462,7 @@ bool NewRenderLogInScene(HDC hDC)
     EndSprite();
     BeginBitmap();
 
-    if (CCameraMove::GetInstancePtr()->IsTourMode())
+    if (gMapManager.WorldActive == WD_73NEW_LOGIN_SCENE)
     {
         g_fMULogoAlpha += 0.02f;
         if (g_fMULogoAlpha > 10.0f) g_fMULogoAlpha = 10.0f;
@@ -449,14 +485,10 @@ bool NewRenderLogInScene(HDC hDC)
     g_pRenderText->SetTextColor(255, 255, 255, 255);
     g_pRenderText->SetBgColor(0, 0, 0, 128);
 
-    wcscpy_s(Text, 100, I18N::Game::CCopyright2001Webzen);
+    wcscpy_s(Text, 100, L"Servidor Ajustado por ooowill.");
     GetTextExtentPoint32(g_pRenderText->GetFontDC(), Text, lstrlen(Text), &Size);
-    g_pRenderText->RenderText(335 - Size.cx * REFERENCE_WIDTH / WindowWidth, REFERENCE_HEIGHT - Size.cy * REFERENCE_WIDTH / WindowWidth - 1, Text);
-
-    wcscpy_s(Text, 100, I18N::Game::AllRightsReserved);
-
-    GetTextExtentPoint32(g_pRenderText->GetFontDC(), Text, lstrlen(Text), &Size);
-    g_pRenderText->RenderText(335, REFERENCE_HEIGHT - Size.cy * REFERENCE_WIDTH / WindowWidth - 1, Text);
+    g_pRenderText->RenderText((REFERENCE_WIDTH - Size.cx * REFERENCE_WIDTH / WindowWidth) / 2,
+        REFERENCE_HEIGHT - Size.cy * REFERENCE_WIDTH / WindowWidth - 1, Text);
 
     swprintf_s(Text, 100, I18N::Game::VerS, m_ExeVersion);
 

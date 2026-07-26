@@ -445,7 +445,7 @@ void CServerSelWin::UpdateWhileActive(double dDeltaTick)
                 //    bTestServer = true;
                 //}
 
-                g_ServerListManager->SetSelectServerInfo(m_pSelectServerGroup->m_szName, pServerInfo->m_iIndex, pServerInfo->m_byNonPvP);
+                g_ServerListManager->SetSelectServerInfo(m_pSelectServerGroup->m_szName, pServerInfo->m_iIndex, pServerInfo->m_iConnectIndex, pServerInfo->m_byNonPvP);
 
                 break;
             }
@@ -474,12 +474,5 @@ void CServerSelWin::RenderControls()
             m_aServerGauge[i].Render();
         }
 
-        if (m_pSelectServerGroup->m_bPvPServer == true)
-        {
-            g_pRenderText->SetTextColor(ARGB(255, 255, 255, 255));
-            g_pRenderText->RenderText(90, 164 - 60, I18N::Game::SinceHelheimServer);
-            g_pRenderText->RenderText(90, 164 - 45, I18N::Game::TendsToBeCrowded);
-            g_pRenderText->RenderText(90, 164 - 30, I18N::Game::WeRecommendThatYouUseOtherServers);
-        }
     }
 }

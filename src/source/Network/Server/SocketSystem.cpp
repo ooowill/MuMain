@@ -9,16 +9,35 @@
 #include "UI/Legacy/UIControls.h"
 #include "Character/CharacterManager.h"
 
+#include <algorithm>
+#include <iterator>
+
 using namespace SEASON4A;
 
+namespace
+{
+int GetSafeSocketCount(const ITEM* item)
+{
+    return item == nullptr ? 0 : std::min<int>(item->SocketCount, MAX_SOCKETS);
+}
 
+bool IsValidSocketSeed(BYTE seedId)
+{
+    return seedId != SOCKET_EMPTY && seedId < MAX_SOCKET_OPTION;
+}
+
+bool IsValidSocketSphereLevel(BYTE sphereLevel)
+{
+    return sphereLevel >= 1 && sphereLevel <= MAX_SPHERE_LEVEL;
+}
+}
 
 CSocketItemMgr g_SocketItemMgr;
 
 CSocketItemMgr::CSocketItemMgr()
 {
     m_iNumEquitSetBonusOptions = 0;
-    memset(m_SocketOptionInfo, 0, sizeof(SOCKET_OPTION_INFO) * MAX_SOCKET_OPTION);
+    memset(m_SocketOptionInfo, 0, sizeof(m_SocketOptionInfo));
     memset(&m_StatusBonus, 0, sizeof(SOCKET_OPTION_STATUS_BONUS));
 }
 
@@ -28,12 +47,12 @@ CSocketItemMgr::~CSocketItemMgr()
 
 BOOL CSocketItemMgr::IsSocketItem(const ITEM* pItem)
 {
-    return IsSocketItem(pItem->Type);
+    return pItem != nullptr && IsSocketItem(pItem->Type);
 }
 
 BOOL CSocketItemMgr::IsSocketItem(const OBJECT* pObject)
 {
-    return IsSocketItem(pObject->Type - MODEL_SWORD);
+    return pObject != nullptr && IsSocketItem(pObject->Type - MODEL_SWORD);
 }
 
 BOOL CSocketItemMgr::IsSocketItem(int iItemType)
@@ -71,7 +90,10 @@ BOOL CSocketItemMgr::IsSocketItem(int iItemType)
 
 int CSocketItemMgr::GetSocketCategory(int iSeedID)
 {
-    if (iSeedID == SOCKET_EMPTY) return SOCKET_EMPTY;
+    if (iSeedID < 0 || iSeedID >= MAX_SOCKET_OPTION || iSeedID == SOCKET_EMPTY)
+    {
+        return SOCKET_EMPTY;
+    }
 
     SOCKET_OPTION_INFO* pInfo = &m_SocketOptionInfo[SOT_SOCKET_ITEM_OPTIONS][iSeedID];
     return pInfo->m_iOptionCategory;
@@ -81,7 +103,7 @@ int CSocketItemMgr::GetSeedShpereSeedID(const ITEM* pItem)
 {
     BYTE bySocketSeedID = SOCKET_EMPTY;
 
-    if (pItem->Type >= ITEM_SEED_SPHERE_FIRE_1 && pItem->Type <= ITEM_SEED_SPHERE_EARTH_5)
+    if (pItem != nullptr && pItem->Type >= ITEM_SEED_SPHERE_FIRE_1 && pItem->Type <= ITEM_SEED_SPHERE_EARTH_5)
     {
         int iCategoryIndex = (pItem->Type - (ITEM_SEED_SPHERE_FIRE_1)) % 6 + 1;
         int iLevel = pItem->Level;
@@ -117,22 +139,28 @@ __int64 CSocketItemMgr::CalcSocketBonusItemValue(const ITEM* pItem, __int64 iOrg
 
     if (IsSocketItem(pItem))
     {
-        iGoldResult += iOrgGold * (pItem->SocketCount * 0.8f);
+        const int socketCount = GetSafeSocketCount(pItem);
+        iGoldResult += iOrgGold * (socketCount * 0.8f);
 
-        ITEM TempSeedSphere;
-        for (int i = 0; i < pItem->SocketCount; ++i)
+        ITEM TempSeedSphere{};
+        for (int i = 0; i < socketCount; ++i)
         {
-            if (pItem->SocketSeedID[i] == SOCKET_EMPTY) continue;
+            const BYTE seedId = pItem->SocketSeedID[i];
+            const BYTE sphereLevel = pItem->SocketSphereLv[i];
+            if (!IsValidSocketSeed(seedId) || seedId > 40 || !IsValidSocketSphereLevel(sphereLevel))
+            {
+                continue;
+            }
 
             int iSeedSphereType = 0;
-            if (pItem->SocketSeedID[i] >= 0 && pItem->SocketSeedID[i] <= 9) iSeedSphereType = 0;
-            else if (pItem->SocketSeedID[i] >= 10 && pItem->SocketSeedID[i] <= 15) iSeedSphereType = 1;
-            else if (pItem->SocketSeedID[i] >= 16 && pItem->SocketSeedID[i] <= 20) iSeedSphereType = 2;
-            else if (pItem->SocketSeedID[i] >= 21 && pItem->SocketSeedID[i] <= 28) iSeedSphereType = 3;
-            else if (pItem->SocketSeedID[i] >= 29 && pItem->SocketSeedID[i] <= 33) iSeedSphereType = 4;
-            else if (pItem->SocketSeedID[i] >= 34 && pItem->SocketSeedID[i] <= 40) iSeedSphereType = 5;
+            if (seedId <= 9) iSeedSphereType = 0;
+            else if (seedId <= 15) iSeedSphereType = 1;
+            else if (seedId <= 20) iSeedSphereType = 2;
+            else if (seedId <= 28) iSeedSphereType = 3;
+            else if (seedId <= 33) iSeedSphereType = 4;
+            else iSeedSphereType = 5;
 
-            TempSeedSphere.Type = ITEM_SEED_SPHERE_FIRE_1 + (pItem->SocketSphereLv[i] - 1) * MAX_SOCKET_TYPES + iSeedSphereType;
+            TempSeedSphere.Type = ITEM_SEED_SPHERE_FIRE_1 + (sphereLevel - 1) * MAX_SOCKET_TYPES + iSeedSphereType;
             iGoldResult += ItemValue(&TempSeedSphere, 0);
         }
     }
@@ -142,6 +170,11 @@ __int64 CSocketItemMgr::CalcSocketBonusItemValue(const ITEM* pItem, __int64 iOrg
 
 int CSocketItemMgr::CalcSocketOptionValue(int iOptionType, float fOptionValue)
 {
+    if (fOptionValue == 0.f)
+    {
+        return 0;
+    }
+
     switch (iOptionType)
     {
     case 1:
@@ -200,7 +233,17 @@ void CSocketItemMgr::CalcSocketOptionValueText(wchar_t* pszOptionValueText, int 
 
 void CSocketItemMgr::CreateSocketOptionText(wchar_t* pszOptionText, int iSeedID, int iSphereLv)
 {
-    if (pszOptionText == NULL) return;
+    if (pszOptionText == nullptr)
+    {
+        return;
+    }
+
+    pszOptionText[0] = L'\0';
+    if (iSeedID < 0 || iSeedID >= MAX_SOCKET_OPTION
+        || iSphereLv < 1 || iSphereLv > MAX_SPHERE_LEVEL)
+    {
+        return;
+    }
 
     wchar_t szOptionValueText[16] = { 0, };
 
@@ -217,7 +260,8 @@ extern int SkipNum;
 
 int CSocketItemMgr::AttachToolTipForSocketItem(const ITEM* pItem, int iTextNum)
 {
-    if (pItem->SocketCount == 0) return iTextNum;
+    const int socketCount = GetSafeSocketCount(pItem);
+    if (socketCount == 0) return iTextNum;
 
     mu_swprintf(TextList[iTextNum], L"\n"); ++iTextNum; ++SkipNum;
     mu_swprintf(TextList[iTextNum], L"%ls %ls", I18N::Game::Socket, I18N::Game::ItemOptionInfo);
@@ -229,21 +273,24 @@ int CSocketItemMgr::AttachToolTipForSocketItem(const ITEM* pItem, int iTextNum)
     wchar_t szOptionText[64] = { 0, };
     wchar_t szOptionValueText[16] = { 0, };
 
-    for (int i = 0; i < pItem->SocketCount; ++i)
+    for (int i = 0; i < socketCount; ++i)
     {
+        szOptionText[0] = L'\0';
         if (pItem->SocketSeedID[i] == SOCKET_EMPTY)
         {
             mu_swprintf(szOptionText, I18N::Game::NoItemApplication);
             TextListColor[iTextNum] = TEXT_COLOR_GRAY;
         }
-        else if (pItem->SocketSeedID[i] < MAX_SOCKET_OPTION)
+        else if (IsValidSocketSeed(pItem->SocketSeedID[i])
+            && IsValidSocketSphereLevel(pItem->SocketSphereLv[i]))
         {
             CreateSocketOptionText(szOptionText, pItem->SocketSeedID[i], pItem->SocketSphereLv[i]);
             TextListColor[iTextNum] = TEXT_COLOR_BLUE;
         }
         else
         {
-            assert(!"Socket index error");
+            mu_swprintf(szOptionText, I18N::Game::NoItemApplication);
+            TextListColor[iTextNum] = TEXT_COLOR_GRAY;
         }
 
         mu_swprintf(TextList[iTextNum], I18N::Game::SocketDS, i + 1, szOptionText);
@@ -410,6 +457,11 @@ void CSocketItemMgr::RenderToolTipForSocketSetOption(int iPos_x, int iPos_y)
         SOCKET_OPTION_INFO* pInfo = NULL;
         for (std::deque<DWORD>::iterator iter = m_EquipSetBonusList.begin(); iter != m_EquipSetBonusList.end(); ++iter)
         {
+            if (*iter >= MAX_SOCKET_OPTION)
+            {
+                continue;
+            }
+
             pInfo = &m_SocketOptionInfo[SOT_EQUIP_SET_BONUS_OPTIONS][*iter];
             CalcSocketOptionValueText(szOptionValueText, pInfo->m_bOptionType, (float)pInfo->m_iOptionValue[0]);
             mu_swprintf(TextList[TextNum], L"%ls %ls", pInfo->m_szOptionName, szOptionValueText);
@@ -425,6 +477,10 @@ void CSocketItemMgr::RenderToolTipForSocketSetOption(int iPos_x, int iPos_y)
 void CSocketItemMgr::CheckSocketSetOption()
 {
     m_EquipSetBonusList.clear();
+    if (CharacterMachine == nullptr)
+    {
+        return;
+    }
 
     int iSeedSum[6] = { 0, 0, 0, 0, 0, 0 };
     ITEM* pItem = NULL;
@@ -433,17 +489,29 @@ void CSocketItemMgr::CheckSocketSetOption()
     for (int i = 0; i < MAX_EQUIPMENT; ++i)
     {
         pItem = &CharacterMachine->Equipment[i];
-        for (int j = 0; j < pItem->SocketCount; ++j)
+        if (!IsSocketItem(pItem))
         {
-            if (pItem->SocketSeedID[j] != SOCKET_EMPTY)
+            continue;
+        }
+
+        const int socketCount = GetSafeSocketCount(pItem);
+        for (int j = 0; j < socketCount; ++j)
+        {
+            const BYTE seedId = pItem->SocketSeedID[j];
+            if (IsValidSocketSeed(seedId))
             {
-                pInfo = &m_SocketOptionInfo[SOT_SOCKET_ITEM_OPTIONS][pItem->SocketSeedID[j]];
-                ++iSeedSum[pInfo->m_iOptionCategory - 1];
+                pInfo = &m_SocketOptionInfo[SOT_SOCKET_ITEM_OPTIONS][seedId];
+                const int categoryIndex = pInfo->m_iOptionCategory - 1;
+                if (categoryIndex >= 0 && categoryIndex < static_cast<int>(std::size(iSeedSum)))
+                {
+                    ++iSeedSum[categoryIndex];
+                }
             }
         }
     }
 
-    for (int i = 0; i < m_iNumEquitSetBonusOptions; ++i)
+    const int setBonusCount = std::clamp(m_iNumEquitSetBonusOptions, 0, MAX_SOCKET_OPTION);
+    for (int i = 0; i < setBonusCount; ++i)
     {
         int icnt = 0;
         BYTE* pbySetTest = m_SocketOptionInfo[SOT_EQUIP_SET_BONUS_OPTIONS][i].m_bySocketCheckInfo;
@@ -454,29 +522,40 @@ void CSocketItemMgr::CheckSocketSetOption()
         }
         if (icnt < 6) continue;
 
-        m_EquipSetBonusList.push_back(m_SocketOptionInfo[SOT_EQUIP_SET_BONUS_OPTIONS][i].m_iOptionID);
+        const int optionId = m_SocketOptionInfo[SOT_EQUIP_SET_BONUS_OPTIONS][i].m_iOptionID;
+        if (optionId >= 0 && optionId < MAX_SOCKET_OPTION)
+        {
+            m_EquipSetBonusList.push_back(optionId);
+        }
     }
 }
 
 int CSocketItemMgr::GetSocketOptionValue(const ITEM* pItem, int iSocketIndex)
 {
-    if (pItem->SocketCount > 0 && pItem->SocketSeedID[iSocketIndex] != SOCKET_EMPTY)
+    const int socketCount = GetSafeSocketCount(pItem);
+    if (iSocketIndex >= 0 && iSocketIndex < socketCount)
     {
-        SOCKET_OPTION_INFO* pInfo = NULL;
-        pInfo = &m_SocketOptionInfo[SOT_SOCKET_ITEM_OPTIONS][pItem->SocketSeedID[iSocketIndex]];
-        auto fOptionValue = (float)pInfo->m_iOptionValue[pItem->SocketSphereLv[iSocketIndex] - 1];
-        return CalcSocketOptionValue(pInfo->m_bOptionType, fOptionValue);
+        const BYTE seedId = pItem->SocketSeedID[iSocketIndex];
+        const BYTE sphereLevel = pItem->SocketSphereLv[iSocketIndex];
+        if (IsValidSocketSeed(seedId) && IsValidSocketSphereLevel(sphereLevel))
+        {
+            SOCKET_OPTION_INFO* pInfo = &m_SocketOptionInfo[SOT_SOCKET_ITEM_OPTIONS][seedId];
+            auto fOptionValue = (float)pInfo->m_iOptionValue[sphereLevel - 1];
+            return CalcSocketOptionValue(pInfo->m_bOptionType, fOptionValue);
+        }
     }
-    else
-    {
-        return 0;
-    }
+
+    return 0;
 }
 
 void CSocketItemMgr::CalcSocketStatusBonus()
 {
     memset(&m_StatusBonus, 0, sizeof(SOCKET_OPTION_STATUS_BONUS));
     m_StatusBonus.m_fDefenceRateBonus = 1.0f;
+    if (CharacterMachine == nullptr)
+    {
+        return;
+    }
 
     ITEM* pItem = NULL;
     SOCKET_OPTION_INFO* pInfo = NULL;
@@ -487,12 +566,15 @@ void CSocketItemMgr::CalcSocketStatusBonus()
 
         if (!IsSocketItem(pItem)) continue;
 
-        for (int j = 0; j < pItem->SocketCount; ++j)
+        const int socketCount = GetSafeSocketCount(pItem);
+        for (int j = 0; j < socketCount; ++j)
         {
-            if (pItem->SocketSeedID[j] != SOCKET_EMPTY)
+            const BYTE seedId = pItem->SocketSeedID[j];
+            const BYTE sphereLevel = pItem->SocketSphereLv[j];
+            if (IsValidSocketSeed(seedId) && IsValidSocketSphereLevel(sphereLevel))
             {
-                pInfo = &m_SocketOptionInfo[SOT_SOCKET_ITEM_OPTIONS][pItem->SocketSeedID[j]];
-                auto fOptionValue = (float)pInfo->m_iOptionValue[pItem->SocketSphereLv[j] - 1];
+                pInfo = &m_SocketOptionInfo[SOT_SOCKET_ITEM_OPTIONS][seedId];
+                auto fOptionValue = (float)pInfo->m_iOptionValue[sphereLevel - 1];
                 int iBonus = CalcSocketOptionValue(pInfo->m_bOptionType, fOptionValue);
 
                 switch (pInfo->m_iOptionID)
@@ -542,7 +624,8 @@ void CSocketItemMgr::CalcSocketStatusBonus()
             }
         }
 
-        if (pItem->SocketSeedSetOption != SOCKET_EMPTY)
+        if (pItem->SocketSeedSetOption != SOCKET_EMPTY
+            && pItem->SocketSeedSetOption < MAX_SOCKET_OPTION)
         {
             pInfo = &m_SocketOptionInfo[SOT_MIX_SET_BONUS_OPTIONS][pItem->SocketSeedSetOption];
             int iBonus = CalcSocketOptionValue(pInfo->m_bOptionType, (float)pInfo->m_iOptionValue[0]);

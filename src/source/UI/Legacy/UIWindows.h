@@ -15,7 +15,7 @@ const int g_ciWindowFrameThickness = 5;
 const int g_ciWindowTitleHeight = 21;
 const int UIWND_DEFAULT = -1;
 
-const DWORD g_cdwLetterCost = 1000;
+const DWORD g_cdwLetterCost = 1;
 
 enum UIWINDOWSTYLE
 {

@@ -94,11 +94,24 @@ void CCharInfoBalloon::Create(CHARACTER* pCharInfo)
 {
     CSprite::Create(118, 54, BITMAP_LOG_IN + 7, 0, nullptr, 59, 54);
 
+    SetCharacter(pCharInfo);
+}
+
+void CCharInfoBalloon::SetCharacter(CHARACTER* pCharInfo)
+{
     m_pCharInfo = pCharInfo;
     m_dwNameColor = 0;
     std::fill(std::begin(m_szName), std::end(m_szName), L'\0');
     std::fill(std::begin(m_szGuild), std::end(m_szGuild), L'\0');
     std::fill(std::begin(m_szClass), std::end(m_szClass), L'\0');
+
+    if (m_pCharInfo == nullptr)
+    {
+        CSprite::m_bShow = false;
+        return;
+    }
+
+    SetInfo();
 }
 
 void CCharInfoBalloon::Render()

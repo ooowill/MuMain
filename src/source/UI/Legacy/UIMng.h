@@ -67,6 +67,7 @@ public:
     void CreateLoginScene();
     void CreateCharacterScene();
     void CreateMainScene();
+    void EnsureLoginSceneWindowsRegistered();
 
     /**
      * @brief Re-layouts the current scene's UI for the current WindowWidth/

@@ -169,7 +169,7 @@ bool SEASON3B::CNewUIItemEnduranceInfo::UpdateMouseEvent()
         ITEM_ATTRIBUTE* pItemAtt = &ItemAttribute[pItem->Type];
         int iMaxDurability = CalcMaxDurability(pItem, pItemAtt, iLevel);
 
-        if (pItem->Durability <= iMaxDurability * 0.5f)
+        if (iMaxDurability > 0 && pItem->Durability <= 0)
         {
             if (i == EQUIPMENT_RING_RIGHT)
             {
@@ -632,7 +632,7 @@ bool SEASON3B::CNewUIItemEnduranceInfo::RenderItemEndurance(int ix, int iY)
         ITEM_ATTRIBUTE* pItemAtt = &ItemAttribute[pItem->Type];
         int iMaxDurability = CalcMaxDurability(pItem, pItemAtt, iLevel);
 
-        if (pItem->Durability > iMaxDurability * 0.5f)
+        if (iMaxDurability <= 0 || pItem->Durability > 0)
         {
             continue;
         }
@@ -650,22 +650,7 @@ bool SEASON3B::CNewUIItemEnduranceInfo::RenderItemEndurance(int ix, int iY)
             bRenderRingWarning = true;
         }
 
-        if (pItem->Durability == 0)
-        {
-            glColor4f(1.f, 0.0f, 0.f, 0.5f);
-        }
-        else if (pItem->Durability <= iMaxDurability * 0.2f)
-        {
-            glColor4f(1.f, 0.2f, 0.0f, 0.5f);
-        }
-        else if (pItem->Durability <= iMaxDurability * 0.3f)
-        {
-            glColor4f(1.0f, 0.5f, 0.f, 0.5f);
-        }
-        else if (pItem->Durability <= iMaxDurability * 0.5f)
-        {
-            glColor4f(1.f, 1.f, 0.f, 0.5f);
-        }
+        glColor4f(1.f, 0.0f, 0.f, 0.5f);
 
         if (i == EQUIPMENT_RING_RIGHT)
         {
@@ -706,25 +691,9 @@ bool SEASON3B::CNewUIItemEnduranceInfo::RenderItemEndurance(int ix, int iY)
         int iLevel = pItem->Level;
         int iMaxDurability = CalcMaxDurability(pItem, pItemAttr, iLevel);
 
-        if (pItem->Durability <= (iMaxDurability * 0.5f))
+        if (iMaxDurability > 0 && pItem->Durability <= 0)
         {
-            if (pItem->Durability <= 0)
-            {
-                dwColor = 0xFF0000FF;
-            }
-            else if (pItem->Durability <= (iMaxDurability * 0.2f))
-            {
-                dwColor = 0xFF0053FF;
-            }
-            else if (pItem->Durability <= (iMaxDurability * 0.3f))
-            {
-                dwColor = 0xFF00A8FF;
-            }
-            else if (pItem->Durability <= (iMaxDurability * 0.5f))
-            {
-                dwColor = 0xFF00FFFF;
-            }
-
+            dwColor = 0xFF0000FF;
             RenderTooltip(MouseX, MouseY - 10, pItem, dwColor);
             m_iTooltipIndex = -1;
         }

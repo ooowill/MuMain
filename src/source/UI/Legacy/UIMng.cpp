@@ -14,6 +14,7 @@
 #include "Engine/Object/ZzzObject.h"
 #include "Engine/Object/ZzzCharacter.h"
 #include "Engine/Object/ZzzInterface.h"
+#include "Core/Utilities/Log/ErrorReport.h"
 
 #include "UIControls.h"
 #include "Network/Server/ServerListManager.h"
@@ -37,6 +38,8 @@
 #define UIM_TS_BACK8		11
 #define UIM_TS_BACK9		12
 #define	UIM_TS_MAX			13
+
+extern CErrorReport g_ErrorReport;
 
 CUIMng::CUIMng()
 {
@@ -235,6 +238,32 @@ void CUIMng::CreateLoginScene()
     m_nScene = UIM_SCENE_LOGIN;
 }
 
+void CUIMng::EnsureLoginSceneWindowsRegistered()
+{
+    if (m_nScene != UIM_SCENE_LOGIN)
+    {
+        return;
+    }
+
+    CWin* loginWindows[] = {
+        &m_MsgWin,
+        &m_SysMenuWin,
+        &m_OptionWin,
+        &m_LoginMainWin,
+        &m_ServerSelWin,
+        &m_LoginWin,
+        &m_CreditWin,
+    };
+
+    for (CWin* window : loginWindows)
+    {
+        if (m_WinList.Find(window) == NULL)
+        {
+            m_WinList.AddTail(window);
+        }
+    }
+}
+
 void CUIMng::CreateCharacterScene()
 {
     RemoveWinList();
@@ -261,8 +290,9 @@ void CUIMng::CreateCharacterScene()
 
     m_CharSelMainWin.Create();
     m_WinList.AddHead(&m_CharSelMainWin);
-    nBaseY = int(567.0f / 600.0f * (float)rInput.GetScreenHeight());
-    m_CharSelMainWin.SetPosition(22, nBaseY - m_CharSelMainWin.GetHeight() - 11);
+    m_CharSelMainWin.SetPosition(
+        rInput.GetScreenWidth() - m_CharSelMainWin.GetWidth() - 24,
+        std::max(24, static_cast<int>((rInput.GetScreenHeight() * 16) / 100)));
 
     m_CharMakeWin.Create();
     m_WinList.AddHead(&m_CharMakeWin);
@@ -343,6 +373,16 @@ void CUIMng::RepositionSceneUI()
 
 CWin* CUIMng::SetActiveWin(CWin* pWin)
 {
+    if (pWin == NULL)
+        return NULL;
+
+    NODE* pWinNode = m_WinList.Find(pWin);
+    if (pWinNode == NULL)
+    {
+        g_ErrorReport.Write(L"[UIMng::SetActiveWin] skipped unmanaged window scene=%d\r\n", m_nScene);
+        return NULL;
+    }
+
     CWin* pBeforeActWin = (CWin*)m_WinList.GetHead();
 
     if (pBeforeActWin == NULL)
@@ -355,7 +395,7 @@ CWin* CUIMng::SetActiveWin(CWin* pWin)
 
     if (pWin->IsShow())
     {
-        if (!m_WinList.RemoveAt(m_WinList.Find(pWin)))
+        if (!m_WinList.RemoveAt(pWinNode))
             return NULL;
 
         m_bWinActive = true;
@@ -367,13 +407,26 @@ CWin* CUIMng::SetActiveWin(CWin* pWin)
 
 void CUIMng::ShowWin(CWin* pWin)
 {
+    if (pWin == NULL)
+        return;
+
+    if (m_WinList.Find(pWin) == NULL)
+    {
+        g_ErrorReport.Write(L"[UIMng::ShowWin] skipped unmanaged window scene=%d\r\n", m_nScene);
+        return;
+    }
+
     pWin->Show(TRUE);
     SetActiveWin(pWin);
 }
 
 void CUIMng::HideWin(CWin* pWin)
 {
-    if (!m_WinList.RemoveAt(m_WinList.Find(pWin)))
+    if (pWin == NULL)
+        return;
+
+    NODE* pWinNode = m_WinList.Find(pWin);
+    if (pWinNode == NULL || !m_WinList.RemoveAt(pWinNode))
         return;
 
     pWin->Show(FALSE);
@@ -381,7 +434,7 @@ void CUIMng::HideWin(CWin* pWin)
     m_WinList.AddTail(pWin);
 
     pWin = (CWin*)m_WinList.GetHead();
-    if (pWin->IsShow())
+    if (pWin != NULL && pWin->IsShow())
         m_bWinActive = true;
 }
 

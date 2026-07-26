@@ -30,6 +30,7 @@ public:
     void Create(CHARACTER* pCharInfo);
     void Render();
 
+    void SetCharacter(CHARACTER* pCharInfo);
     void SetInfo();
 
 private:

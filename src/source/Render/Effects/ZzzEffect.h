@@ -60,6 +60,7 @@ void CheckClientArrow(OBJECT* o);
 void RenderEffects(bool bRenderBlendMesh = false);
 void RenderAfterEffects(bool bRenderBlendMesh = false);
 void RenderEffectShadows();
+void ClearPerformanceEffects();
 void CreateEffectFpsChecked(int Type, vec3_t Position, vec3_t Angle, vec3_t Light, int SubType = 0, OBJECT* Target = NULL, short PKKey = -1,
     WORD SkillIndex = 0, WORD Skill = 0, WORD SkillSerialNum = 0, float Scale = 0.0f, short int sTargetIndex = -1);
 void CreateEffect(int Type, vec3_t Position, vec3_t Angle, vec3_t Light, int SubType = 0, OBJECT* Target = NULL, short PKKey = -1,

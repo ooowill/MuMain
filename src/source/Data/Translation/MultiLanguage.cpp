@@ -7,19 +7,26 @@
 
 CMultiLanguage* CMultiLanguage::ms_Singleton = NULL;
 
+static bool IsLegacyLanguage(const std::wstring& language, const wchar_t* first, const wchar_t* second, const wchar_t* third = nullptr)
+{
+    return wcsicmp(language.c_str(), first) == 0 ||
+        wcsicmp(language.c_str(), second) == 0 ||
+        (third != nullptr && wcsicmp(language.c_str(), third) == 0);
+}
+
 CMultiLanguage::CMultiLanguage(std::wstring strSelectedML)
 {
     ms_Singleton = this;
 
-    if (wcsicmp(strSelectedML.c_str(), L"ENG") == 0)
+    if (IsLegacyLanguage(strSelectedML, L"ENG", L"EN"))
     {
         byLanguage = 0;
     }
-    else if (wcsicmp(strSelectedML.c_str(), L"POR") == 0)
+    else if (IsLegacyLanguage(strSelectedML, L"POR", L"PT"))
     {
         byLanguage = 1;
     }
-    else if (wcsicmp(strSelectedML.c_str(), L"SPN") == 0)
+    else if (IsLegacyLanguage(strSelectedML, L"SPN", L"ES", L"SPA"))
     {
         byLanguage = 2;
     }

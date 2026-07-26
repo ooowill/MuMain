@@ -7,6 +7,7 @@
 #include "UI/NewUI/Inventory/NewUIItemMng.h"
 #include "UI/NewUI/NewUISystem.h"
 #include "Engine/Object/ZzzInventory.h"
+#include "Character/ItemEvolutionClient.h"
 #include "GameLogic/Items/CComGem.h"
 #include "GameLogic/Pets/GIPetManager.h"
 #include "GameLogic/Items/CSItemOption.h"
@@ -14,6 +15,19 @@
 #include "World/MapInfra/MapManager.h"
 #include "GameLogic/Items/MixMgr.h"
 using namespace SEASON3B;
+
+namespace
+{
+    bool IsValidInventoryItem(const ITEM* pItem)
+    {
+        return pItem != nullptr && pItem->Type >= 0 && pItem->Type < MAX_ITEM;
+    }
+
+    ITEM_ATTRIBUTE* GetInventoryItemAttribute(const ITEM* pItem)
+    {
+        return IsValidInventoryItem(pItem) ? &ItemAttribute[pItem->Type] : nullptr;
+    }
+}
 
 SEASON3B::CNewUIPickedItem::CNewUIPickedItem()
 {
@@ -32,7 +46,7 @@ SEASON3B::CNewUIPickedItem::~CNewUIPickedItem()
 
 bool SEASON3B::CNewUIPickedItem::Create(CNewUIItemMng* pNewItemMng, CNewUIInventoryCtrl* pSrc, ITEM* pItem)
 {
-    if (g_pNewUI3DRenderMng == nullptr || pNewItemMng == nullptr || pItem == nullptr)
+    if (g_pNewUI3DRenderMng == nullptr || pNewItemMng == nullptr || !IsValidInventoryItem(pItem))
         return false;
 
     m_pNewItemMng = pNewItemMng;
@@ -42,9 +56,15 @@ bool SEASON3B::CNewUIPickedItem::Create(CNewUIItemMng* pNewItemMng, CNewUIInvent
         return false;
     }
 
-    g_pNewUI3DRenderMng->Add3DRenderObj(this, INFORMATION_CAMERA_Z_ORDER);
+    const ITEM_ATTRIBUTE* pItemAttr = GetInventoryItemAttribute(m_pPickedItem);
+    if (pItemAttr == nullptr)
+    {
+        m_pNewItemMng->DeleteDuplicatedItem(m_pPickedItem);
+        m_pPickedItem = nullptr;
+        return false;
+    }
 
-    const ITEM_ATTRIBUTE* pItemAttr = &ItemAttribute[m_pPickedItem->Type];
+    g_pNewUI3DRenderMng->Add3DRenderObj(this, INFORMATION_CAMERA_Z_ORDER);
     m_Size.cx = pItemAttr->Width * INVENTORY_SQUARE_WIDTH;
     m_Size.cy = pItemAttr->Height * INVENTORY_SQUARE_HEIGHT;
     m_Pos.x = MouseX - m_Size.cx / 2;
@@ -133,7 +153,11 @@ bool SEASON3B::CNewUIPickedItem::GetTargetPos(CNewUIInventoryCtrl* pDest, int& i
         RECT rcInventory;
         pDest->GetRect(rcInventory);
 
-        const ITEM_ATTRIBUTE* pItemAttr = &ItemAttribute[m_pPickedItem->Type];
+        const ITEM_ATTRIBUTE* pItemAttr = GetInventoryItemAttribute(m_pPickedItem);
+        if (pItemAttr == nullptr)
+        {
+            return false;
+        }
         const int iPickedItemX = MouseX - ((pItemAttr->Width - 1) * INVENTORY_SQUARE_WIDTH / 2);
         const int iPickedItemY = MouseY - ((pItemAttr->Height - 1) * INVENTORY_SQUARE_HEIGHT / 2);
 
@@ -169,7 +193,7 @@ void SEASON3B::CNewUIPickedItem::HidePickedItem()
 
 void SEASON3B::CNewUIPickedItem::Render3D()
 {
-    if (m_pPickedItem && m_pPickedItem->Type >= 0)
+    if (IsValidInventoryItem(m_pPickedItem))
     {
         m_Pos.x = MouseX - m_Size.cx / 2;
         m_Pos.y = MouseY - m_Size.cy / 2;
@@ -260,9 +284,25 @@ void SEASON3B::CNewUIInventoryCtrl::SetItemColorState(ITEM* pItem)
         return;
     }
 
-    ITEM_ATTRIBUTE* pItemAttr = &ItemAttribute[pItem->Type];
+    if (pItem->Type < 0 || pItem->Type >= MAX_ITEM)
+    {
+        pItem->byColorState = ITEM_COLOR_NORMAL;
+        return;
+    }
+
+    ITEM_ATTRIBUTE* pItemAttr = GetInventoryItemAttribute(pItem);
+    if (pItemAttr == nullptr)
+    {
+        pItem->byColorState = ITEM_COLOR_NORMAL;
+        return;
+    }
     const int iLevel = pItem->Level;
     const int iMaxDurability = CalcMaxDurability(pItem, pItemAttr, iLevel);
+    if (iMaxDurability <= 0)
+    {
+        pItem->byColorState = ITEM_COLOR_NORMAL;
+        return;
+    }
 
     if (pItem->Durability <= 0)
     {
@@ -421,8 +461,16 @@ bool SEASON3B::CNewUIInventoryCtrl::AddItem(int iColumnX, int iRowY, std::span<c
     }
 
     ITEM* pNewItem = m_pNewItemMng->CreateItem(itemData);
-    if (nullptr == pNewItem)
+    if (!IsValidInventoryItem(pNewItem))
+    {
+        if (pNewItem != nullptr)
+        {
+            m_pNewItemMng->DeleteItem(pNewItem);
+        }
         return false;
+    }
+
+    ItemEvolutionClient::ApplySlotInfoToItem(iRowY * m_nColumn + iColumnX + m_nIndexOffset, pNewItem);
 
     if (!CanMove(iColumnX, iRowY, pNewItem))
     {
@@ -430,7 +478,12 @@ bool SEASON3B::CNewUIInventoryCtrl::AddItem(int iColumnX, int iRowY, std::span<c
         return false;
     }
 
-    const ITEM_ATTRIBUTE* pItemAttr = &ItemAttribute[pNewItem->Type];
+    const ITEM_ATTRIBUTE* pItemAttr = GetInventoryItemAttribute(pNewItem);
+    if (pItemAttr == nullptr)
+    {
+        m_pNewItemMng->DeleteItem(pNewItem);
+        return false;
+    }
     pNewItem->x = iColumnX;
     pNewItem->y = iRowY;
 
@@ -453,8 +506,14 @@ bool SEASON3B::CNewUIInventoryCtrl::AddItem(int iColumnX, int iRowY, ITEM* pItem
         iColumnX >= m_nColumn || iRowY >= m_nRow) return false;
 
     ITEM* pNewItem = m_pNewItemMng->CreateItem(pItem);
-    if (nullptr == pNewItem)
+    if (!IsValidInventoryItem(pNewItem))
+    {
+        if (pNewItem != nullptr)
+        {
+            m_pNewItemMng->DeleteItem(pNewItem);
+        }
         return false;
+    }
 
     if (!CanMove(iColumnX, iRowY, pNewItem))
     {
@@ -462,7 +521,12 @@ bool SEASON3B::CNewUIInventoryCtrl::AddItem(int iColumnX, int iRowY, ITEM* pItem
         return false;
     }
 
-    const ITEM_ATTRIBUTE* pItemAttr = &ItemAttribute[pNewItem->Type];
+    const ITEM_ATTRIBUTE* pItemAttr = GetInventoryItemAttribute(pNewItem);
+    if (pItemAttr == nullptr)
+    {
+        m_pNewItemMng->DeleteItem(pNewItem);
+        return false;
+    }
     pNewItem->x = iColumnX;
     pNewItem->y = iRowY;
 
@@ -485,8 +549,14 @@ bool SEASON3B::CNewUIInventoryCtrl::AddItem(int iColumnX, int iRowY, BYTE byType
 
     ITEM* pNewItem = m_pNewItemMng->CreateItem(byType, bySubType, byLevel, byDurability,
         byOption1, byOptionEx, byOption380, byOptionHarmony);
-    if (nullptr == pNewItem)
+    if (!IsValidInventoryItem(pNewItem))
+    {
+        if (pNewItem != nullptr)
+        {
+            m_pNewItemMng->DeleteItem(pNewItem);
+        }
         return false;
+    }
 
     if (!CanMove(iColumnX, iRowY, pNewItem))
     {
@@ -494,7 +564,12 @@ bool SEASON3B::CNewUIInventoryCtrl::AddItem(int iColumnX, int iRowY, BYTE byType
         return false;
     }
 
-    const ITEM_ATTRIBUTE* pItemAttr = &ItemAttribute[pNewItem->Type];
+    const ITEM_ATTRIBUTE* pItemAttr = GetInventoryItemAttribute(pNewItem);
+    if (pItemAttr == nullptr)
+    {
+        m_pNewItemMng->DeleteItem(pNewItem);
+        return false;
+    }
     pNewItem->x = iColumnX;
     pNewItem->y = iRowY;
 
@@ -519,13 +594,19 @@ void SEASON3B::CNewUIInventoryCtrl::RemoveItem(ITEM* pItem)
         {
             m_vecItem.erase(li);
 
-            const ITEM_ATTRIBUTE* pItemAttr = &ItemAttribute[pItem->Type];
-            for (int y = 0; y < pItemAttr->Height; y++)
+            const ITEM_ATTRIBUTE* pItemAttr = GetInventoryItemAttribute(pItem);
+            if (pItemAttr != nullptr)
             {
-                for (int x = 0; x < pItemAttr->Width; x++)
+                for (int y = 0; y < pItemAttr->Height; y++)
                 {
-                    const int iCurIndex = (pItem->y + y) * m_nColumn + (pItem->x + x);
-                    m_pdwItemCheckBox[iCurIndex] = 0;
+                    for (int x = 0; x < pItemAttr->Width; x++)
+                    {
+                        const int iCurIndex = (pItem->y + y) * m_nColumn + (pItem->x + x);
+                        if (iCurIndex >= 0 && iCurIndex < m_nColumn * m_nRow)
+                        {
+                            m_pdwItemCheckBox[iCurIndex] = 0;
+                        }
+                    }
                 }
             }
             m_pNewItemMng->DeleteItem(pItem);
@@ -905,16 +986,20 @@ bool SEASON3B::CNewUIInventoryCtrl::UpdateMouseEvent()
         && (m_pdwItemCheckBox[m_iPointedSquareIndex - m_nIndexOffset] > 1) && g_pNewUIMng)
     {
         ITEM* pItem = this->FindItem(m_iPointedSquareIndex);
-        if (pItem != nullptr && pItem != m_pToolTipItem)
+        if (IsValidInventoryItem(pItem) && pItem != m_pToolTipItem)
         {
             CreateItemToolTip(pItem);
 
-            if ((pItem->Type == ITEM_DARK_HORSE_ITEM) || (pItem->Type == ITEM_DARK_RAVEN_ITEM))
+            if (IsValidInventoryItem(m_pToolTipItem)
+                && ((pItem->Type == ITEM_DARK_HORSE_ITEM) || (pItem->Type == ITEM_DARK_RAVEN_ITEM)))
             {
-                const ITEM_ATTRIBUTE* pItemAttr = &ItemAttribute[m_pToolTipItem->Type];
-                const int iTargetX = m_Pos.x + m_pToolTipItem->x * INVENTORY_SQUARE_WIDTH + pItemAttr->Width * INVENTORY_SQUARE_WIDTH / 2;
-                const int iTargetY = m_Pos.y + m_pToolTipItem->y * INVENTORY_SQUARE_HEIGHT;
-                giPetManager::RequestPetInfo(iTargetX, iTargetY, pItem);
+                const ITEM_ATTRIBUTE* pItemAttr = GetInventoryItemAttribute(m_pToolTipItem);
+                if (pItemAttr != nullptr)
+                {
+                    const int iTargetX = m_Pos.x + m_pToolTipItem->x * INVENTORY_SQUARE_WIDTH + pItemAttr->Width * INVENTORY_SQUARE_WIDTH / 2;
+                    const int iTargetY = m_Pos.y + m_pToolTipItem->y * INVENTORY_SQUARE_HEIGHT;
+                    giPetManager::RequestPetInfo(iTargetX, iTargetY, pItem);
+                }
             }
         }
     }
@@ -1047,7 +1132,11 @@ void SEASON3B::CNewUIInventoryCtrl::Render()
             if (IntersectRect(&rcIntersect, &rcPickedItem, &rcInventory))
             {
                 ITEM* pPickItem = ms_pPickedItem->GetItem();
-                const ITEM_ATTRIBUTE* pItemAttr = &ItemAttribute[pPickItem->Type];
+                const ITEM_ATTRIBUTE* pItemAttr = GetInventoryItemAttribute(pPickItem);
+                if (pItemAttr == nullptr)
+                {
+                    return;
+                }
                 const int iPickedItemX = MouseX - ((pItemAttr->Width - 1) * INVENTORY_SQUARE_WIDTH / 2);
                 const int iPickedItemY = MouseY - ((pItemAttr->Height - 1) * INVENTORY_SQUARE_HEIGHT / 2);
 
@@ -1130,7 +1219,11 @@ void SEASON3B::CNewUIInventoryCtrl::Render()
                                         const int	iType = pTargetItem->Type;
                                         const int	iDurability = pTargetItem->Durability;
 
-                                        if ((pPickItem->Type == ITEM_JEWEL_OF_BLESS) || (pPickItem->Type == ITEM_JEWEL_OF_SOUL))
+                                        if (IsCustomJewelItemType(pPickItem->Type))
+                                        {
+                                            bSuccess = CanUpgradeItem(pPickItem, pTargetItem);
+                                        }
+                                        else if ((pPickItem->Type == ITEM_JEWEL_OF_BLESS) || (pPickItem->Type == ITEM_JEWEL_OF_SOUL))
                                         {
                                             bSuccess = CanUpgradeItem(pPickItem, pTargetItem);
                                         }
@@ -1375,19 +1468,32 @@ bool SEASON3B::CNewUIInventoryCtrl::CheckRectInRect(const RECT& rcBox)
 
 bool SEASON3B::CNewUIInventoryCtrl::CanMove(int iLinealPos, ITEM* pItem)
 {
+    if (!IsValidInventoryItem(pItem))
+    {
+        return false;
+    }
+
     const auto startIndex = iLinealPos - m_nIndexOffset;
     if (startIndex < 0 || startIndex >= m_nColumn * m_nRow)
     {
         return false;
     }
 
-    const ITEM_ATTRIBUTE* pItemAttr = &ItemAttribute[pItem->Type];
+    const ITEM_ATTRIBUTE* pItemAttr = GetInventoryItemAttribute(pItem);
+    if (pItemAttr == nullptr)
+    {
+        return false;
+    }
     return CheckSlot(startIndex, pItemAttr->Width, pItemAttr->Height);
 }
 
 bool SEASON3B::CNewUIInventoryCtrl::CanMove(int iColumnX, int iRowY, ITEM* pItem)
 {
-    const ITEM_ATTRIBUTE* pItemAttr = &ItemAttribute[pItem->Type];
+    const ITEM_ATTRIBUTE* pItemAttr = GetInventoryItemAttribute(pItem);
+    if (pItemAttr == nullptr)
+    {
+        return false;
+    }
     return CheckSlot(iColumnX, iRowY, pItemAttr->Width, pItemAttr->Height);
 }
 
@@ -1409,7 +1515,7 @@ void SEASON3B::CNewUIInventoryCtrl::CreateItemToolTip(ITEM* pItem)
     if (m_pToolTipItem)
         DeleteItemToolTip();
 
-    if (g_pNewItemMng)
+    if (g_pNewItemMng && IsValidInventoryItem(pItem))
         m_pToolTipItem = g_pNewItemMng->CreateItem(pItem);
 }
 
@@ -1449,7 +1555,11 @@ void SEASON3B::CNewUIInventoryCtrl::RenderNumberOfItem()
     for (; li != m_vecItem.end(); ++li)
     {
         const ITEM* pItem = (*li);
-        const ITEM_ATTRIBUTE* pItemAttr = &ItemAttribute[pItem->Type];
+        const ITEM_ATTRIBUTE* pItemAttr = GetInventoryItemAttribute(pItem);
+        if (pItemAttr == nullptr)
+        {
+            continue;
+        }
         const float x = m_Pos.x + (pItem->x * INVENTORY_SQUARE_WIDTH);
         const float y = m_Pos.y + (pItem->y * INVENTORY_SQUARE_HEIGHT);
         const float width = pItemAttr->Width * INVENTORY_SQUARE_WIDTH;
@@ -1508,9 +1618,13 @@ void SEASON3B::CNewUIInventoryCtrl::RenderNumberOfItem()
 
 void SEASON3B::CNewUIInventoryCtrl::RenderItemToolTip()
 {
-    if (m_pToolTipItem)
+    if (IsValidInventoryItem(m_pToolTipItem))
     {
-        const ITEM_ATTRIBUTE* pItemAttr = &ItemAttribute[m_pToolTipItem->Type];
+        const ITEM_ATTRIBUTE* pItemAttr = GetInventoryItemAttribute(m_pToolTipItem);
+        if (pItemAttr == nullptr)
+        {
+            return;
+        }
         const int iTargetX = m_Pos.x + m_pToolTipItem->x * INVENTORY_SQUARE_WIDTH + pItemAttr->Width * INVENTORY_SQUARE_WIDTH / 2;
         int iTargetY = m_Pos.y + m_pToolTipItem->y * INVENTORY_SQUARE_HEIGHT;
 
@@ -1629,7 +1743,11 @@ void SEASON3B::CNewUIInventoryCtrl::Render3D()
     for (; li != m_vecItem.end(); ++li)
     {
         const ITEM* pItem = (*li);
-        const ITEM_ATTRIBUTE* pItemAttr = &ItemAttribute[pItem->Type];
+        const ITEM_ATTRIBUTE* pItemAttr = GetInventoryItemAttribute(pItem);
+        if (pItemAttr == nullptr)
+        {
+            continue;
+        }
 
         const float x = m_Pos.x + (pItem->x * INVENTORY_SQUARE_WIDTH);
         const float y = m_Pos.y + (pItem->y * INVENTORY_SQUARE_HEIGHT);
@@ -1801,6 +1919,11 @@ bool SEASON3B::CNewUIInventoryCtrl::CanPushItem()
 bool SEASON3B::CNewUIInventoryCtrl::CanUpgradeItem(ITEM* pSourceItem, ITEM* pTargetItem)
 {
     const int	iTargetLevel = pTargetItem->Level;
+
+    if (IsCustomJewelItemType(pSourceItem->Type))
+    {
+        return IsCustomJewelTargetType(pTargetItem->Type);
+    }
 
     if (((pTargetItem->Type >= ITEM_SWORD && pTargetItem->Type < ITEM_WING)
         && (pTargetItem->Type != ITEM_BOLT)

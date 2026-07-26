@@ -91,6 +91,7 @@ namespace SEASON3B
         DWORD GetShopState();
 
         int GetPointedItemIndex();
+        int GetPointedItemSlot();
 
         //. Exporting Functions
         void SetStandbyItemKey(DWORD dwItemKey);

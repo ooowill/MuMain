@@ -28,9 +28,9 @@
 #include <string>
 #include <vector>
 
-extern	wchar_t TextList[50][100];
-extern	int  TextListColor[50];
-extern	int  TextBold[50];
+extern	wchar_t TextList[64][100];
+extern	int  TextListColor[64];
+extern	int  TextBold[64];
 
 namespace
 {

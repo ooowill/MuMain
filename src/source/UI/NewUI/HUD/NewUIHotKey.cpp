@@ -15,11 +15,10 @@
 #include "UI/Legacy/UIMng.h"
 #include "World/MapInfra/MapManager.h"
 #include "Character/CharacterManager.h"
+#include "Network/Server/ServerListManager.h"
 #ifdef KJH_ADD_INGAMESHOP_UI_SYSTEM
 #include "GameShop/InGameShopSystem.h"
 #endif // KJH_ADD_INGAMESHOP_UI_SYSTEM
-
-#include "MUHelper/MuHelper.h"
 
 using namespace SEASON3B;
 
@@ -138,6 +137,11 @@ bool SEASON3B::CNewUIHotKey::UpdateKeyEvent()
     {
         if (SEASON3B::IsPress('M') == true)
         {
+            if (g_ServerListManager != nullptr && g_ServerListManager->IsSelectedPvpServer())
+            {
+                return false;
+            }
+
             g_pNewUISystem->Toggle(SEASON3B::INTERFACE_MOVEMAP);
             PlayBuffer(SOUND_CLICK01);
         }
@@ -266,6 +270,11 @@ bool SEASON3B::CNewUIHotKey::UpdateKeyEvent()
     }
     else if (SEASON3B::IsPress('M') == true)
     {
+        if (g_ServerListManager != nullptr && g_ServerListManager->IsSelectedPvpServer())
+        {
+            return false;
+        }
+
         g_pNewUISystem->Toggle(SEASON3B::INTERFACE_MOVEMAP);
         PlayBuffer(SOUND_CLICK01);
 
@@ -336,18 +345,6 @@ bool SEASON3B::CNewUIHotKey::UpdateKeyEvent()
             return false;
 
         g_pNewUISystem->Toggle(SEASON3B::INTERFACE_GENSRANKING);
-        PlayBuffer(SOUND_CLICK01);
-        return false;
-    }
-    else if (SEASON3B::IsPress(VK_HOME) && !g_pChatInputBox->HaveFocus())
-    {
-        MUHelper::g_MuHelper.Toggle();
-        PlayBuffer(SOUND_CLICK01);
-        return false;
-    }
-    else if (SEASON3B::IsPress('Z'))
-    {
-        g_pNewUISystem->Toggle(SEASON3B::INTERFACE_MUHELPER);
         PlayBuffer(SOUND_CLICK01);
         return false;
     }

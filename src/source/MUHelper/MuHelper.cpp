@@ -5,14 +5,20 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <algorithm>
+#include <cwctype>
+#include <initializer_list>
+#include <climits>
 
 #include "Engine/AI/ZzzAI.h"
 #include "Engine/Object/ZzzCharacter.h"
 #include "Engine/Object/ZzzInterface.h"
+#include "Engine/Object/ZzzInfomation.h"
 #include "Engine/Object/PlayerActionState.h"
 #include "UI/NewUI/NewUISystem.h"
 #include "Core/Utilities/Log/muConsoleDebug.h"
 #include "Character/CharacterManager.h"
+#include "GameLogic/Items/CSItemOption.h"
 #include "GameLogic/Skills/SkillManager.h"
 #include "GameLogic/Social/PartyManager.h"
 #include "World/MapInfra/MapManager.h"
@@ -22,6 +28,10 @@
 
 constexpr int MAX_ACTIONABLE_DISTANCE = 10;
 constexpr int DEFAULT_DURABILITY_THRESHOLD = 50;
+constexpr int DEFAULT_HUNTING_RANGE = 6;
+constexpr int DEFAULT_OBTAINING_RANGE = 8;
+constexpr int MAX_AUTO_STAT_VALUE = 32767;
+constexpr int MAX_AUTO_STAT_SEND_PER_TICK = 5;
 
 SpinLock _targetsLock;
 SpinLock _itemsLock;
@@ -41,6 +51,107 @@ namespace MUHelper
 
     CMuHelper g_MuHelper;
 
+    int CountExcellentOptions(const ITEM* pItem)
+    {
+        if (pItem == nullptr)
+        {
+            return 0;
+        }
+
+        int count = 0;
+        BYTE flags = pItem->ExcellentFlags & 0x3F;
+        while (flags != 0)
+        {
+            count += flags & 1;
+            flags >>= 1;
+        }
+        return count;
+    }
+
+    bool HasMinimumOptionLevel(const ITEM* pItem, int minimumOptionLevel)
+    {
+        if (minimumOptionLevel <= 0)
+        {
+            return true;
+        }
+
+        if (pItem == nullptr)
+        {
+            return false;
+        }
+
+        return std::max<int>(pItem->OptionLevel, CountExcellentOptions(pItem)) >= minimumOptionLevel;
+    }
+
+    std::wstring ToLower(std::wstring value)
+    {
+        std::transform(value.begin(), value.end(), value.begin(), [](wchar_t ch)
+        {
+            return static_cast<wchar_t>(std::towlower(ch));
+        });
+        return value;
+    }
+
+    bool ContainsAny(const std::wstring& text, std::initializer_list<const wchar_t*> terms)
+    {
+        for (const wchar_t* term : terms)
+        {
+            if (term != nullptr && text.find(term) != std::wstring::npos)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool IsEventOrConsumableItem(ITEM* pItem)
+    {
+        if (pItem == nullptr)
+        {
+            return false;
+        }
+
+        if (pItem->Type >= ITEM_POTION)
+        {
+            return true;
+        }
+
+        const std::wstring name = ToLower(GetItemDisplayName(pItem));
+        return ContainsAny(
+            name,
+            {
+                L"box", L"key", L"ticket", L"medal", L"heart", L"ribbon",
+                L"invitation", L"fragment", L"scroll", L"potion", L"cherry",
+                L"chocolate", L"pumpkin", L"sign", L"seal", L"mix", L"event"
+            });
+    }
+
+    bool IsEquipmentOrClassItem(ITEM* pItem)
+    {
+        if (pItem == nullptr || pItem->Type < 0)
+        {
+            return false;
+        }
+
+        return IsRequireClassRenderItem(pItem->Type)
+            || (pItem->Type >= ITEM_SWORD && pItem->Type < ITEM_POTION);
+    }
+
+    bool IsUsableByCurrentHero(ITEM* pItem)
+    {
+        if (pItem == nullptr || Hero == nullptr || CharacterAttribute == nullptr)
+        {
+            return true;
+        }
+
+        if (!IsEquipmentOrClassItem(pItem))
+        {
+            return true;
+        }
+
+        return IsRequireEquipItem(pItem);
+    }
+
     void CALLBACK CMuHelper::TimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime)
     {
         g_MuHelper.WorkLoop(hwnd, uMsg, idEvent, dwTime);
@@ -49,6 +160,7 @@ namespace MUHelper
     void CMuHelper::Save(const ConfigData& config)
     {
         m_config = config;
+        m_config.bAutoDistributePoints = true;
 
         PRECEIVE_MUHELPER_DATA netData;
         ConfigDataSerDe::Serialize(m_config, netData);
@@ -59,16 +171,49 @@ namespace MUHelper
     void CMuHelper::Load(const ConfigData& config)
     {
         m_config = config;
+        m_config.bAutoDistributePoints = true;
     }
 
     ConfigData CMuHelper::GetConfig() const {
         return m_config;
     }
 
+    bool CMuHelper::CanRunInCurrentArea() const
+    {
+        return Hero != nullptr
+            && (!Hero->SafeZone || IsSelectedPvpServerForAutoAttack());
+    }
+
+    bool CMuHelper::IsAttackableTarget(CHARACTER* pTarget) const
+    {
+        if (Hero == nullptr
+            || pTarget == nullptr
+            || pTarget == Hero
+            || pTarget->Dead > 0
+            || !pTarget->Object.Live)
+        {
+            return false;
+        }
+
+        if (IsMonster(pTarget))
+        {
+            return true;
+        }
+
+        const int iIndex = FindCharacterIndex(pTarget->Key);
+        if (iIndex == MAX_CHARACTERS_CLIENT)
+        {
+            return false;
+        }
+
+        return IsPvpServerAutoAttackTarget(pTarget, iIndex);
+    }
+
     void CMuHelper::Toggle()
     {
         if (m_bActive)
         {
+            m_bStartRequested = false;
             TriggerStop();
 
             // Stop the client-driven bot immediately instead of waiting for the
@@ -79,23 +224,74 @@ namespace MUHelper
         }
         else
         {
+            if (!CanRunInCurrentArea())
+            {
+                ResetSessionState(true);
+                return;
+            }
+
+            m_bStartRequested = true;
             TriggerStart();
+            Start();
         }
     }
 
     void CMuHelper::TriggerStart()
     {
-        if (!Hero->SafeZone)
-            SocketClient->ToGameServer()->SendMuHelperStatusChangeRequest(0);
+        auto* gameServer = SocketClient != nullptr ? SocketClient->ToGameServer() : nullptr;
+        if (gameServer != nullptr)
+        {
+            gameServer->SendMuHelperStatusChangeRequest(0);
+        }
     }
 
     void CMuHelper::TriggerStop()
     {
-        SocketClient->ToGameServer()->SendMuHelperStatusChangeRequest(1);
+        auto* gameServer = SocketClient != nullptr ? SocketClient->ToGameServer() : nullptr;
+        if (gameServer != nullptr)
+        {
+            gameServer->SendMuHelperStatusChangeRequest(1);
+        }
+    }
+
+    void CMuHelper::ResetSessionState(bool notifyServer)
+    {
+        m_bStartRequested = false;
+        Stop();
+
+        if (notifyServer)
+        {
+            TriggerStop();
+        }
+    }
+
+    void CMuHelper::ResumeAfterReconnect()
+    {
+        if (!CanRunInCurrentArea())
+        {
+            ResetSessionState(true);
+            return;
+        }
+
+        m_bStartRequested = true;
+        TriggerStart();
+        Start();
+    }
+
+    bool CMuHelper::ShouldAcceptServerStart() const
+    {
+        return m_bStartRequested
+            && CanRunInCurrentArea();
     }
 
     void CMuHelper::Start()
     {
+        if (!CanRunInCurrentArea())
+        {
+            ResetSessionState(true);
+            return;
+        }
+
         if (m_bActive)
         {
             return;
@@ -111,8 +307,10 @@ namespace MUHelper
         m_iCurrentItem = MAX_ITEMS;
         m_posOriginal = { Hero->PositionX, Hero->PositionY };
 
-        m_iHuntingDistance = ComputeDistanceByRange(m_config.iHuntingRange);
-        m_iObtainingDistance = ComputeDistanceByRange(m_config.iObtainingRange);
+        const int huntingRange = m_config.iHuntingRange > 0 ? m_config.iHuntingRange : DEFAULT_HUNTING_RANGE;
+        const int obtainingRange = m_config.iObtainingRange > 0 ? m_config.iObtainingRange : DEFAULT_OBTAINING_RANGE;
+        m_iHuntingDistance = ComputeDistanceByRange(huntingRange);
+        m_iObtainingDistance = ComputeDistanceByRange(obtainingRange);
 
         m_iSecondsElapsed = 0;
         m_iSecondsAway = 0;
@@ -121,14 +319,18 @@ namespace MUHelper
         m_bPetActivated = false;
 
         m_iLoopCounter = 0;
+        m_iAutoPointLoopCounter = 0;
 
+        DeleteAllTargets();
         m_bActive = true;
+        SeedVisibleTargets();
         g_ConsoleDebug->Write(MCD_NORMAL, L"[MU Helper] Started");
     }
 
     void CMuHelper::Stop()
     {
         m_bActive = false;
+        DeleteAllTargets();
         g_ConsoleDebug->Write(MCD_NORMAL, L"[MU Helper] Stopped");
     }
 
@@ -139,14 +341,14 @@ namespace MUHelper
             return;
         }
 
-        if (Hero->SafeZone)
+        if (!CanRunInCurrentArea())
         {
-            g_ConsoleDebug->Write(MCD_NORMAL, L"[MU Helper] Entered safezone. Stopping.");
-            TriggerStop();
+            ResetSessionState(true);
             return;
         }
 
         Work();
+        AutoDistributeStatPoints();
 
         if (m_iLoopCounter++ == 4)
         {
@@ -217,6 +419,11 @@ namespace MUHelper
             return;
         }
 
+        if (!IsAttackableTarget(pTarget))
+        {
+            return;
+        }
+
         int iDistance = ComputeDistanceFromTarget(pTarget);
 
         if ((iDistance <= m_iHuntingDistance)
@@ -234,7 +441,7 @@ namespace MUHelper
             _targetsLock.unlock();
         }
 
-        if (m_config.bUseSelfDefense && IsMonster(pTarget))
+        if (m_config.bUseSelfDefense)
         {
             m_iCurrentTarget = iTargetId;
         }
@@ -305,10 +512,17 @@ namespace MUHelper
         for (const int& iMonsterId : setTargets)
         {
             int iIndex = FindCharacterIndex(iMonsterId);
+            if (iIndex == MAX_CHARACTERS_CLIENT)
+            {
+                DeleteTarget(iMonsterId);
+                continue;
+            }
+
             CHARACTER* pTarget = &CharactersClient[iIndex];
 
-            if (!IsMonster(pTarget))
+            if (!IsAttackableTarget(pTarget))
             {
+                DeleteTarget(iMonsterId);
                 continue;
             }
 
@@ -338,10 +552,17 @@ namespace MUHelper
         for (const int& iMonsterId : setTargets)
         {
             int iIndex = FindCharacterIndex(iMonsterId);
+            if (iIndex == MAX_CHARACTERS_CLIENT)
+            {
+                DeleteTarget(iMonsterId);
+                continue;
+            }
+
             CHARACTER* pTarget = &CharactersClient[iIndex];
 
-            if (!IsMonster(pTarget))
+            if (!IsAttackableTarget(pTarget))
             {
+                DeleteTarget(iMonsterId);
                 continue;
             }
 
@@ -354,6 +575,25 @@ namespace MUHelper
         }
 
         return iFarthestMonsterId;
+    }
+
+    void CMuHelper::SeedVisibleTargets()
+    {
+        if (!m_bActive || Hero == nullptr)
+        {
+            return;
+        }
+
+        for (int i = 0; i < MAX_CHARACTERS_CLIENT; ++i)
+        {
+            CHARACTER* pTarget = &CharactersClient[i];
+            if (!IsAttackableTarget(pTarget))
+            {
+                continue;
+            }
+
+            AddTarget(pTarget->Key, false);
+        }
     }
 
     void CMuHelper::CleanupTargets()
@@ -375,7 +615,7 @@ namespace MUHelper
             }
 
             CHARACTER* pTarget = &CharactersClient[iIndex];
-            if (pTarget->Dead > 0 || !pTarget->Object.Live)
+            if (!IsAttackableTarget(pTarget))
             {
                 DeleteTarget(iMonsterId);
             }
@@ -707,10 +947,22 @@ namespace MUHelper
     {
         if (m_iCurrentTarget == -1)
         {
+            CleanupTargets();
+
+            bool hasTargets = false;
+            {
+                _targetsLock.lock();
+                hasTargets = !m_setTargets.empty();
+                _targetsLock.unlock();
+            }
+
+            if (!hasTargets)
+            {
+                SeedVisibleTargets();
+            }
+
             if (!m_setTargets.empty())
             {
-                CleanupTargets();
-
                 if (m_config.bLongRangeCounterAttack)
                 {
                     m_iCurrentTarget = GetFarthestAttackingTarget();
@@ -730,16 +982,20 @@ namespace MUHelper
 
         if (m_config.bUseCombo)
         {
-            return SimulateComboAttack();
+            const int comboResult = SimulateComboAttack();
+            if (comboResult != 0 || Hero->Movement)
+            {
+                return comboResult;
+            }
         }
 
         m_iCurrentSkill = SelectAttackSkill();
         if (m_iCurrentSkill > AT_SKILL_UNDEFINED)
         {
-            const float fSkillDistance = gSkillManager.GetSkillDistance(m_iCurrentSkill, Hero);
-            if (GameLogic::Combat::CanExecuteSkill(Hero, m_iCurrentSkill, fSkillDistance))
+            const int skillResult = SimulateAttack(m_iCurrentSkill);
+            if (skillResult != 0 || Hero->Movement)
             {
-                return SimulateAttack(m_iCurrentSkill);
+                return skillResult;
             }
         }
 
@@ -754,13 +1010,114 @@ namespace MUHelper
         return 1;
     }
 
+    bool CMuHelper::IsAttackSkillUsable(ActionSkillType iSkill) const
+    {
+        if (Hero == nullptr
+            || CharacterAttribute == nullptr
+            || iSkill <= AT_SKILL_UNDEFINED
+            || iSkill >= MAX_SKILLS)
+        {
+            return false;
+        }
+
+        const int iSkillIndex = g_pSkillList->GetSkillIndex(iSkill);
+        if (iSkillIndex < 0 || iSkillIndex >= MAX_MAGIC)
+        {
+            return false;
+        }
+
+        if (CharacterAttribute->Skill[iSkillIndex] == AT_SKILL_UNDEFINED)
+        {
+            return false;
+        }
+
+        if (!gSkillManager.AreSkillAttributeRequirementsMet(iSkill)
+            || !IsCanBCSkill(iSkill)
+            || !CheckSkillUseCondition(&Hero->Object, iSkill)
+            || !g_csItemOption.IsNonWeaponSkillOrIsSkillEquipped(iSkill))
+        {
+            return false;
+        }
+
+        const bool isSittingOnPet = Hero->Helper.Type == MODEL_HORN_OF_UNIRIA
+            || Hero->Helper.Type == MODEL_HORN_OF_DINORANT
+            || Hero->Helper.Type == MODEL_HORN_OF_FENRIR;
+
+        if ((iSkill == AT_SKILL_POWER_SLASH || iSkill == AT_SKILL_POWER_SLASH_STR) && isSittingOnPet)
+        {
+            return false;
+        }
+
+        if (iSkill == AT_SKILL_IMPALE)
+        {
+            if (!isSittingOnPet)
+            {
+                return false;
+            }
+
+            const int iTypeL = CharacterMachine->Equipment[EQUIPMENT_WEAPON_LEFT].Type;
+            const int iTypeR = CharacterMachine->Equipment[EQUIPMENT_WEAPON_RIGHT].Type;
+            if ((iTypeL < ITEM_SPEAR || iTypeL >= ITEM_BOW) && (iTypeR < ITEM_SPEAR || iTypeR >= ITEM_BOW))
+            {
+                return false;
+            }
+        }
+
+        const int iTypeL = CharacterMachine->Equipment[EQUIPMENT_WEAPON_LEFT].Type;
+        const int iTypeR = CharacterMachine->Equipment[EQUIPMENT_WEAPON_RIGHT].Type;
+        const bool hasNonStaffWeapon = iTypeR != -1
+            && (iTypeR < ITEM_STAFF || iTypeR >= ITEM_STAFF + MAX_ITEM_INDEX)
+            && (iTypeL < ITEM_STAFF || iTypeL >= ITEM_STAFF + MAX_ITEM_INDEX);
+
+        if (iSkill == AT_SKILL_FIRE_SLASH || iSkill == AT_SKILL_FIRE_SLASH_STR)
+        {
+            constexpr WORD requiredStrength = 596;
+            const WORD strength = CharacterAttribute->Strength + CharacterAttribute->AddStrength;
+            if (strength < requiredStrength || !hasNonStaffWeapon)
+            {
+                return false;
+            }
+        }
+
+        if (iSkill == AT_SKILL_TWISTING_SLASH
+            || iSkill == AT_SKILL_TWISTING_SLASH_STR
+            || iSkill == AT_SKILL_TWISTING_SLASH_STR_MG
+            || iSkill == AT_SKILL_TWISTING_SLASH_MASTERY
+            || iSkill == AT_SKILL_RAGEFUL_BLOW
+            || iSkill == AT_SKILL_RAGEFUL_BLOW_STR
+            || iSkill == AT_SKILL_RAGEFUL_BLOW_MASTERY
+            || iSkill == AT_SKILL_DEATHSTAB
+            || iSkill == AT_SKILL_DEATHSTAB_STR)
+        {
+            if (!hasNonStaffWeapon)
+            {
+                return false;
+            }
+        }
+
+        int iMana = 0;
+        int iSkillMana = 0;
+        gSkillManager.GetSkillInformation(iSkill, 1, nullptr, &iMana, nullptr, &iSkillMana);
+        if (CharacterAttribute->Mana < iMana || CharacterAttribute->SkillMana < iSkillMana)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
     ActionSkillType CMuHelper::SelectAttackSkill()
     {
+        auto isUsableSkill = [this](int iSkillId)
+        {
+            return IsAttackSkillUsable(static_cast<ActionSkillType>(iSkillId));
+        };
+
         const size_t safeSize = std::min({m_config.aiSkill.size(), m_config.aiSkillCondition.size(), m_config.aiSkillInterval.size()});
         for (int i = 1; i < (int)safeSize; i++)
         {
             const int iSkillId = m_config.aiSkill[i];
-            if (iSkillId <= 0 || iSkillId >= MAX_SKILLS)
+            if (!isUsableSkill(iSkillId))
             {
                 continue;
             }
@@ -799,7 +1156,7 @@ namespace MUHelper
             }
         }
 
-        if (m_config.aiSkill[0] > 0)
+        if (isUsableSkill(m_config.aiSkill[0]))
         {
             return (ActionSkillType)m_config.aiSkill[0];
         }
@@ -811,7 +1168,7 @@ namespace MUHelper
     {
         for (int i = 0; i < m_config.aiSkill.size(); i++)
         {
-            if (m_config.aiSkill[i] == 0)
+            if (!IsAttackSkillUsable(static_cast<ActionSkillType>(m_config.aiSkill[i])))
             {
                 return 0;
             }
@@ -835,6 +1192,11 @@ namespace MUHelper
 
     int CMuHelper::SimulateAttack(ActionSkillType iSkill)
     {
+        if (!IsAttackSkillUsable(iSkill))
+        {
+            return 0;
+        }
+
         return SimulateSkill(iSkill, true, m_iCurrentTarget);
     }
 
@@ -847,7 +1209,13 @@ namespace MUHelper
             return 0;
         }
 
-        g_MovementSkill.m_iSkill = iSkill;
+        const int iSkillIndex = g_pSkillList->GetSkillIndex(iSkill);
+        if (iSkillIndex == -1)
+        {
+            return 0;
+        }
+
+        g_MovementSkill.m_iSkill = iSkillIndex;
         g_MovementSkill.m_bMagic = true;
 
         const float fSkillDistance = gSkillManager.GetSkillDistance(iSkill, Hero);
@@ -869,7 +1237,7 @@ namespace MUHelper
                     if (iCharIndex != MAX_CHARACTERS_CLIENT)
                     {
                         CHARACTER* pCurrentTarget = &CharactersClient[iCharIndex];
-                        if (pCurrentTarget->Dead > 0 || !IsMonster(pCurrentTarget))
+                        if (!IsAttackableTarget(pCurrentTarget))
                         {
                             DeleteTarget(iTarget);
                             return 0;
@@ -896,15 +1264,14 @@ namespace MUHelper
                     return 0;
                 }
 
-                SelectedCharacter = iCharIndex;
-
                 CHARACTER* pTarget = &CharactersClient[iCharIndex];
-                if (pTarget->Dead > 0)
+                if (!IsAttackableTarget(pTarget))
                 {
                     DeleteTarget(iTarget);
                     return 0;
                 }
 
+                SelectedCharacter = iCharIndex;
                 g_MovementSkill.m_iTarget = iCharIndex;
 
                 TargetX = (int)(pTarget->Object.Position[0] / TERRAIN_SCALE);
@@ -945,6 +1312,7 @@ namespace MUHelper
 
                     Hero->Path.Lock.unlock();
 
+                    Hero->MovementType = MOVEMENT_SKILL;
                     SendMove(Hero, &Hero->Object);
                     return 0;
                 }
@@ -987,7 +1355,7 @@ namespace MUHelper
         }
 
         CHARACTER* pTarget = &CharactersClient[iCharIndex];
-        if (pTarget->Dead > 0 || !IsMonster(pTarget))
+        if (!IsAttackableTarget(pTarget))
         {
             DeleteTarget(iTarget);
             return 0;
@@ -1042,6 +1410,8 @@ namespace MUHelper
             Hero->Path.CurrentPathFloat = 0;
             Hero->Path.Lock.unlock();
 
+            Hero->MovementType = MOVEMENT_ATTACK;
+            ActionTarget = iCharIndex;
             SendMove(Hero, &Hero->Object);
             return 0;
         }
@@ -1157,6 +1527,12 @@ namespace MUHelper
 
     int CMuHelper::ObtainItem()
     {
+        const int iPriorityAzothItem = SelectAzothItemToObtain();
+        if (iPriorityAzothItem != MAX_ITEMS)
+        {
+            m_iCurrentItem = iPriorityAzothItem;
+        }
+
         if (m_iCurrentItem == MAX_ITEMS)
         {
             m_iCurrentItem = SelectItemToObtain();
@@ -1191,16 +1567,100 @@ namespace MUHelper
             }
             else
             {
-                if (SendGetItem == -1)
-                {
-                    SendGetItem = m_iCurrentItem;
-                    SocketClient->ToGameServer()->SendPickupItemRequest(m_iCurrentItem);
-                    DeleteItem(m_iCurrentItem);
-                }
+                RequestPickupItem(m_iCurrentItem);
             }
         }
 
         return 1;
+    }
+
+    void CMuHelper::AutoDistributeStatPoints()
+    {
+        if (!m_config.bAutoDistributePoints
+            || CharacterAttribute == nullptr
+            || CharacterAttribute->LevelUpPoint <= 0
+            || SocketClient == nullptr
+            || SocketClient->ToGameServer() == nullptr)
+        {
+            return;
+        }
+
+        if (++m_iAutoPointLoopCounter < 5)
+        {
+            return;
+        }
+        m_iAutoPointLoopCounter = 0;
+
+        std::array<int, 5> values =
+        {
+            static_cast<int>(CharacterAttribute->Strength),
+            static_cast<int>(CharacterAttribute->Dexterity),
+            static_cast<int>(CharacterAttribute->Vitality),
+            static_cast<int>(CharacterAttribute->Energy),
+            static_cast<int>(CharacterAttribute->Charisma)
+        };
+
+        std::array<int, 5> weights =
+        {
+            static_cast<int>(m_config.aAutoPointPercent[0]),
+            static_cast<int>(m_config.aAutoPointPercent[1]),
+            static_cast<int>(m_config.aAutoPointPercent[2]),
+            static_cast<int>(m_config.aAutoPointPercent[3]),
+            static_cast<int>(m_config.aAutoPointPercent[4])
+        };
+
+        if (gCharacterManager.GetBaseClass(Hero->Class) != CLASS_DARK_LORD)
+        {
+            weights[4] = 0;
+        }
+
+        const int maxSends = std::min<int>(CharacterAttribute->LevelUpPoint, MAX_AUTO_STAT_SEND_PER_TICK);
+        for (int sendIndex = 0; sendIndex < maxSends; ++sendIndex)
+        {
+            int totalWeight = 0;
+            int totalValue = 0;
+            for (int index = 0; index < 5; ++index)
+            {
+                if (weights[index] > 0 && values[index] < MAX_AUTO_STAT_VALUE)
+                {
+                    totalWeight += weights[index];
+                    totalValue += values[index];
+                }
+            }
+
+            if (totalWeight <= 0)
+            {
+                return;
+            }
+
+            int bestIndex = -1;
+            int bestDeficit = INT_MIN;
+            int bestWeight = 0;
+            for (int index = 0; index < 5; ++index)
+            {
+                if (weights[index] <= 0 || values[index] >= MAX_AUTO_STAT_VALUE)
+                {
+                    continue;
+                }
+
+                const int desired = ((totalValue + 1) * weights[index]) / totalWeight;
+                const int deficit = desired - values[index];
+                if (bestIndex < 0 || deficit > bestDeficit || (deficit == bestDeficit && weights[index] > bestWeight))
+                {
+                    bestIndex = index;
+                    bestDeficit = deficit;
+                    bestWeight = weights[index];
+                }
+            }
+
+            if (bestIndex < 0)
+            {
+                return;
+            }
+
+            SocketClient->ToGameServer()->SendIncreaseCharacterStatPoint(static_cast<CharacterStatAttribute>(bestIndex));
+            ++values[bestIndex];
+        }
     }
 
     bool CMuHelper::ShouldObtainItem(int iItemId)
@@ -1208,10 +1668,42 @@ namespace MUHelper
         ITEM_t* pDrop = &Items[iItemId];
         ITEM* pItem = &pDrop->Item;
 
-        if ((m_config.bPickZen && IsMoneyItem(pItem))
-            || (m_config.bPickJewel && IsJewelItem(pItem))
-            || (m_config.bPickAncient && IsAncientItem(pItem))
-            || (m_config.bPickExcellent && IsExcellentItem(pItem)))
+        if (IsAzothDrop(iItemId))
+        {
+            return true;
+        }
+
+        if (m_config.bPickZen && IsMoneyItem(pItem))
+        {
+            return true;
+        }
+
+        if (m_config.bPickJewel && IsJewelItem(pItem))
+        {
+            return true;
+        }
+
+        if (m_config.bPickEventItems && IsEventOrConsumableItem(pItem))
+        {
+            return true;
+        }
+
+        const bool isAncient = IsAncientItem(pItem);
+        const bool isExcellent = IsExcellentItem(pItem);
+        const bool isCommon = !isAncient
+            && !isExcellent
+            && !IsMoneyItem(pItem)
+            && !IsJewelItem(pItem)
+            && !IsEventOrConsumableItem(pItem);
+
+        const bool matchesSelectedQuality =
+            (m_config.bPickAncient && isAncient)
+            || (m_config.bPickExcellent && isExcellent)
+            || (m_config.bPickCommonItems && isCommon);
+
+        if (matchesSelectedQuality
+            && HasMinimumOptionLevel(pItem, m_config.iMinimumOptionLevel)
+            && (!m_config.bPickOnlyUsableItems || IsUsableByCurrentHero(pItem)))
         {
             return true;
         }
@@ -1230,7 +1722,7 @@ namespace MUHelper
             }
         }
 
-        return m_config.bPickAllItems;
+        return false;
     }
 
     void CMuHelper::AddItem(int iItemId, POINT posWhere)
@@ -1238,6 +1730,19 @@ namespace MUHelper
         _itemsLock.lock();
         m_setItems.insert(iItemId);
         _itemsLock.unlock();
+
+        if (!m_bActive || Hero == nullptr || !IsAzothDrop(iItemId))
+        {
+            return;
+        }
+
+        const int iItemX = (int)(Items[iItemId].Object.Position[0] / TERRAIN_SCALE);
+        const int iItemY = (int)(Items[iItemId].Object.Position[1] / TERRAIN_SCALE);
+        const int iDistance = ComputeDistanceBetween({ Hero->PositionX, Hero->PositionY }, { iItemX, iItemY });
+        if (iDistance <= 2)
+        {
+            RequestPickupItem(iItemId);
+        }
     }
 
     void CMuHelper::DeleteItem(int iItemId)
@@ -1255,7 +1760,7 @@ namespace MUHelper
     int CMuHelper::SelectItemToObtain()
     {
         int iClosestItemId = MAX_ITEMS;
-        int iMinDistance = m_config.iObtainingRange;
+        int iMinDistance = m_iObtainingDistance;
 
         std::set<int> setItems;
         {
@@ -1283,5 +1788,65 @@ namespace MUHelper
         }
 
         return iClosestItemId;
+    }
+
+    int CMuHelper::SelectAzothItemToObtain()
+    {
+        int iClosestItemId = MAX_ITEMS;
+        int iMinDistance = m_iObtainingDistance;
+
+        std::set<int> setItems;
+        {
+            _itemsLock.lock();
+            setItems = m_setItems;
+            _itemsLock.unlock();
+        }
+
+        for (const int& iItemId : setItems)
+        {
+            if (!IsAzothDrop(iItemId))
+            {
+                continue;
+            }
+
+            const int iItemX = (int)(Items[iItemId].Object.Position[0] / TERRAIN_SCALE);
+            const int iItemY = (int)(Items[iItemId].Object.Position[1] / TERRAIN_SCALE);
+            const int iDistance = ComputeDistanceBetween({ Hero->PositionX, Hero->PositionY }, { iItemX, iItemY });
+            if (iDistance <= iMinDistance)
+            {
+                iMinDistance = iDistance;
+                iClosestItemId = iItemId;
+            }
+        }
+
+        return iClosestItemId;
+    }
+
+    bool CMuHelper::IsAzothDrop(int iItemId) const
+    {
+        if (iItemId < 0 || iItemId >= MAX_ITEMS)
+        {
+            return false;
+        }
+
+        const ITEM_t* pDrop = &Items[iItemId];
+        return pDrop->Object.Live
+            && pDrop->Item.Type == ITEM_ZEN
+            && IsAzothMoneyDropAmount(pDrop->Item.Level);
+    }
+
+    bool CMuHelper::RequestPickupItem(int iItemId)
+    {
+        if (SendGetItem != -1
+            || SocketClient == nullptr
+            || SocketClient->ToGameServer() == nullptr)
+        {
+            return false;
+        }
+
+        SendGetItem = iItemId;
+        SocketClient->ToGameServer()->SendPickupItemRequest(iItemId);
+        DeleteItem(iItemId);
+        return true;
     }
 }

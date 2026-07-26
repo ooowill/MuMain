@@ -90,9 +90,9 @@ bool SEASON3B::CNewUIItemExplanationWindow::Render()
     glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
 
     extern int ItemHelp;
-    extern wchar_t TextList[50][100];
-    extern int TextListColor[50];
-    extern int TextBold[50];
+    extern wchar_t TextList[64][100];
+    extern int TextListColor[64];
+    extern int TextBold[64];
     extern int TextNum;
     extern int g_iItemInfo[12][17];
 

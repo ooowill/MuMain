@@ -37,6 +37,13 @@ void CSprite::Create(int nOrgWidth, int nOrgHeight, int nTexID, int nMaxFrame, S
     m_nTexID = nTexID;
     m_pTexture = Bitmaps.FindTexture(m_nTexID);
 
+    if (-1 < m_nTexID && m_pTexture == NULL)
+    {
+        g_ErrorReport.Write(
+            L"[CSprite::Create] texture %d is not loaded; sprite will be hidden.\r\n",
+            m_nTexID);
+    }
+
     m_fScrHeight = (float)WindowHeight / fScaleY;
 
     m_aScrCoord[LT].fX = 0.0f;
@@ -50,7 +57,7 @@ void CSprite::Create(int nOrgWidth, int nOrgHeight, int nTexID, int nMaxFrame, S
 
     m_nNowFrame = -1;
 
-    if (-1 < m_nTexID)
+    if (-1 < m_nTexID && m_pTexture != NULL)
     {
         m_aTexCoord[LT].fTU = 0.5f / m_pTexture->Width;
         m_aTexCoord[LT].fTV = 0.5f / m_pTexture->Height;
@@ -288,6 +295,9 @@ void CSprite::Render()
 
     if (-1 < m_nTexID)
     {
+        if (m_pTexture == NULL)
+            return;
+
         if (!TextureEnable)
         {
             TextureEnable = true;

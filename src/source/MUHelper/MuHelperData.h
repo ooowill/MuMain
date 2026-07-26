@@ -95,6 +95,15 @@ namespace MUHelper
 		bool bPickExtraItems = false;
 		std::set<std::wstring> aExtraItems;
 
+		bool bPickOnlyUsableItems = false;
+		bool bPickCommonItems = false;
+		bool bPickEventItems = false;
+		bool bAutoConvertZenToAzoth = false;
+		bool bAutoReset = false;
+		bool bAutoDistributePoints = true;
+		int iMinimumOptionLevel = 0;
+		std::array<uint8_t, 5> aAutoPointPercent = { 25, 25, 20, 30, 0 };
+
 		// Client-local settings (byte index 33, bits 0-3).
 		// The server (OpenMU) stores MuHelperConfiguration as byte[] echoed
 		// unchanged. It does not parse or enforce these bits. Adding new bits

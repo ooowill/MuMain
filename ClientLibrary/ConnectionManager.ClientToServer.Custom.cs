@@ -5,6 +5,7 @@
 namespace MUnique.Client.Library;
 
 using System;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using MUnique.OpenMU.Network;
@@ -68,6 +69,71 @@ public unsafe partial class ConnectionManager
         catch
         {
             // Log exception
+        }
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "ConnectionManager_SendAntiCheatLaunchTicket")]
+    public static void SendAntiCheatLaunchTicket(
+        int handle,
+        IntPtr ticket,
+        IntPtr clientBuildId,
+        IntPtr manifestVersion,
+        IntPtr launcherVersion,
+        IntPtr policyVersion)
+    {
+        if (!Connections.TryGetValue(handle, out var connection))
+        {
+            return;
+        }
+
+        try
+        {
+            var fields = new[]
+            {
+                NativeInterop.PtrToWideString(ticket) ?? string.Empty,
+                NativeInterop.PtrToWideString(clientBuildId) ?? string.Empty,
+                NativeInterop.PtrToWideString(manifestVersion) ?? string.Empty,
+                NativeInterop.PtrToWideString(launcherVersion) ?? string.Empty,
+                NativeInterop.PtrToWideString(policyVersion) ?? string.Empty,
+            };
+
+            var fieldBytes = fields
+                .Select(value => Encoding.UTF8.GetBytes(value))
+                .ToArray();
+            if (fieldBytes.Any(bytes => bytes.Length > byte.MaxValue))
+            {
+                return;
+            }
+
+            var length = 5 + fieldBytes.Length + fieldBytes.Sum(bytes => bytes.Length);
+            if (length > byte.MaxValue)
+            {
+                return;
+            }
+
+            connection.CreateAndSend(pipeWriter =>
+            {
+                var packet = pipeWriter.GetSpan(length)[..length];
+                packet[0] = 0xC1;
+                packet[1] = (byte)length;
+                packet[2] = 0xF1;
+                packet[3] = 0xFA;
+                packet[4] = 1;
+
+                var offset = 5;
+                foreach (var bytes in fieldBytes)
+                {
+                    packet[offset++] = (byte)bytes.Length;
+                    bytes.CopyTo(packet[offset..]);
+                    offset += bytes.Length;
+                }
+
+                return length;
+            });
+        }
+        catch
+        {
+            // Anti-cheat launch ticket is audit-only; never block login because this packet failed.
         }
     }
 }

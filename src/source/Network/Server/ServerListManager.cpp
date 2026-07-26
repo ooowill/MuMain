@@ -6,11 +6,19 @@
 #include "ServerListManager.h"
 #include "I18N/All.h"
 
+namespace
+{
+    constexpr int PvpServerConnectIndex = 100;
+    constexpr int WarServerConnectIndex = 120;
+}
+
 CServerListManager::CServerListManager()
 {
     m_iTotalServer = 0;
     m_szSelectServerName[0] = '\0';
     m_iSelectServerIndex = -1;
+    m_iSelectConnectIndex = -1;
+    m_byNonPvP = 0;
 }
 
 CServerListManager::~CServerListManager()
@@ -34,6 +42,10 @@ void CServerListManager::Release()
 
     m_mapServerGroup.clear();
     m_iTotalServer = 0;
+    m_szSelectServerName[0] = L'\0';
+    m_iSelectServerIndex = -1;
+    m_iSelectConnectIndex = -1;
+    m_byNonPvP = 0;
 }
 
 void CServerListManager::LoadServerListScript()
@@ -160,9 +172,15 @@ bool CServerListManager::MakeServerGroup(IN int iServerGroupIndex, OUT CServerGr
 
 void CServerListManager::InsertServer(CServerGroup* pServerGroup, int iConnectIndex, int iServerPercent)
 {
+    const int serverIndex = (iConnectIndex % MAX_SERVER_PER_GROUP) + 1;
+    if (serverIndex != 1)
+    {
+        return;
+    }
+
     auto* pServerInfo = new CServerInfo;
     pServerInfo->m_iSequence = pServerGroup->GetServerSize();
-    pServerInfo->m_iIndex = (iConnectIndex % MAX_SERVER_PER_GROUP) + 1;
+    pServerInfo->m_iIndex = serverIndex;
     pServerInfo->m_iConnectIndex = iConnectIndex;
     pServerInfo->m_iPercent = iServerPercent;
     pServerInfo->m_byNonPvP = pServerGroup->m_abyNonPvpServer[pServerInfo->m_iIndex - 1];
@@ -248,10 +266,11 @@ CServerGroup* CServerListManager::GetServerGroupByBtnPos(int iBtnPos)
     return NULL;
 }
 
-void CServerListManager::SetSelectServerInfo(wchar_t* pszName, int iIndex, BYTE byNonPvP)
+void CServerListManager::SetSelectServerInfo(wchar_t* pszName, int iIndex, int iConnectIndex, BYTE byNonPvP)
 {
     wcscpy(m_szSelectServerName, pszName);
     m_iSelectServerIndex = iIndex;
+    m_iSelectConnectIndex = iConnectIndex;
     m_byNonPvP = byNonPvP;
 }
 
@@ -265,6 +284,10 @@ int CServerListManager::GetSelectServerIndex()
     return m_iSelectServerIndex;
 }
 
+int CServerListManager::GetSelectConnectIndex()
+{
+    return m_iSelectConnectIndex;
+}
 
 BYTE CServerListManager::GetNonPVPInfo()
 {
@@ -274,6 +297,31 @@ BYTE CServerListManager::GetNonPVPInfo()
 bool CServerListManager::IsNonPvP()
 {
     return bool(0x01 & GetNonPVPInfo());
+}
+
+bool CServerListManager::IsSelectedPvpServer()
+{
+    if (m_iSelectConnectIndex >= 0)
+    {
+        return m_iSelectConnectIndex == PvpServerConnectIndex;
+    }
+
+    return m_szSelectServerName[0] != L'\0' && wcscmp(m_szSelectServerName, L"PVP") == 0;
+}
+
+bool CServerListManager::IsSelectedWarServer()
+{
+    if (m_iSelectConnectIndex >= 0)
+    {
+        return m_iSelectConnectIndex == WarServerConnectIndex;
+    }
+
+    return m_szSelectServerName[0] != L'\0'
+        && (wcsstr(m_szSelectServerName, L"War") != nullptr
+            || wcsstr(m_szSelectServerName, L"WAR") != nullptr
+            || wcsstr(m_szSelectServerName, L"Guerra") != nullptr
+            || wcsstr(m_szSelectServerName, L"Guild") != nullptr
+            || wcsstr(m_szSelectServerName, L"GUILD") != nullptr);
 }
 
 void CServerListManager::SetTotalServer(int iTotalServer)

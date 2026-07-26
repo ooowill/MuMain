@@ -6,6 +6,8 @@
 #include "UI/Windows/MsgWin.h"
 #include "Core/Input/Input.h"
 #include "UI/Legacy/UIMng.h"
+#include "Core/Platform/WinNls.h"
+#include "Core/Platform/WinUser.h"
 #include "Core/Platform/CrtDbg.h"
 #include "Render/Models/ZzzBMD.h"
 #include "Engine/Object/ZzzInfomation.h"
@@ -20,10 +22,94 @@
 #include "UI/Legacy/UIControls.h"
 #include "Render/Textures/ZzzOpenglUtil.h"
 #include "Scenes/SceneCommon.h"
+#include "Character/AccountCharacterList.h"
 #include "Core/Utilities/Log/ErrorReport.h"
+#include "Network/Server/ServerListManager.h"
 
 #define	MW_OK		0
 #define	MW_CANCEL	1
+
+namespace
+{
+    std::string WideToUtf8ForExclusiveNameUrl(const wchar_t* text)
+    {
+        if (text == nullptr || text[0] == L'\0')
+        {
+            return {};
+        }
+
+        const int byteCount = WideCharToMultiByte(CP_UTF8, 0, text, -1, nullptr, 0, nullptr, nullptr);
+        if (byteCount <= 1)
+        {
+            return {};
+        }
+
+        std::string output(static_cast<std::size_t>(byteCount - 1), '\0');
+        WideCharToMultiByte(CP_UTF8, 0, text, -1, output.data(), byteCount, nullptr, nullptr);
+        return output;
+    }
+
+    std::string UrlEncodeExclusiveNameValue(const std::string& value)
+    {
+        std::string output;
+        output.reserve(value.size());
+
+        constexpr char hex[] = "0123456789ABCDEF";
+        for (const unsigned char character : value)
+        {
+            const bool isUnreserved =
+                (character >= 'A' && character <= 'Z')
+                || (character >= 'a' && character <= 'z')
+                || (character >= '0' && character <= '9')
+                || character == '-'
+                || character == '_'
+                || character == '.'
+                || character == '~';
+
+            if (isUnreserved)
+            {
+                output += static_cast<char>(character);
+                continue;
+            }
+
+            output += '%';
+            output += hex[(character >> 4) & 0x0F];
+            output += hex[character & 0x0F];
+        }
+
+        return output;
+    }
+
+    std::wstring BuildExclusiveNameStoreUrl(const wchar_t* characterName)
+    {
+        std::string url = "https://muonline.pt/store?server_category=name";
+        const std::string encodedName = UrlEncodeExclusiveNameValue(WideToUtf8ForExclusiveNameUrl(characterName));
+        if (!encodedName.empty())
+        {
+            url += "&name_search=";
+            url += encodedName;
+        }
+
+        return std::wstring(url.begin(), url.end());
+    }
+
+    void CopyMessageLine(wchar_t* destination, const std::wstring& source)
+    {
+        if (destination == nullptr)
+        {
+            return;
+        }
+
+        std::size_t count = source.length();
+        if (count > MW_MSG_ROW_MAX - 1)
+        {
+            count = MW_MSG_ROW_MAX - 1;
+        }
+
+        source.copy(destination, count);
+        destination[count] = L'\0';
+    }
+}
 
 
 
@@ -54,13 +140,14 @@ void CMsgWin::Create()
         CWin::RegisterButton(&m_aBtn[i]);
     }
 
-    memset(m_aszMsg[0], 0, sizeof(char) * MW_MSG_LINE_MAX * MW_MSG_ROW_MAX);
+    memset(m_aszMsg, 0, sizeof(m_aszMsg));
 
     m_eType = MWT_NON;
     m_nMsgLine = 0;
     m_nMsgCode = -1;
     m_nGameExit = -1;
     m_dDeltaTickSum = 0.0;
+    m_exclusiveNameStoreUrl.clear();
 }
 
 void CMsgWin::PreRelease()
@@ -274,6 +361,7 @@ void CMsgWin::SetMsg(MSG_WIN_TYPE eType, std::wstring lpszMsg, std::wstring lpsz
     m_eType = eType;
 
     SetCtrlPosition();
+    memset(m_aszMsg, 0, sizeof(m_aszMsg));
 
     if (lpszMsg2.empty())
     {
@@ -281,8 +369,8 @@ void CMsgWin::SetMsg(MSG_WIN_TYPE eType, std::wstring lpszMsg, std::wstring lpsz
     }
     else
     {
-        lpszMsg.copy(m_aszMsg[0], MW_MSG_ROW_MAX - 1);
-        lpszMsg2.copy(m_aszMsg[1], MW_MSG_ROW_MAX - 1);
+        CopyMessageLine(m_aszMsg[0], lpszMsg);
+        CopyMessageLine(m_aszMsg[1], lpszMsg2);
         m_nMsgLine = 2;
     }
 }
@@ -295,6 +383,10 @@ void CMsgWin::PopUp(int nMsgCode, wchar_t* pszMsg)
     MSG_WIN_TYPE eType = MWT_BTN_OK;
     m_nMsgCode = nMsgCode;
     wchar_t szTempMsg[128];
+    if (m_nMsgCode != RECEIVE_CREATE_CHARACTER_EXCLUSIVE_NAME)
+    {
+        m_exclusiveNameStoreUrl.clear();
+    }
 
     switch (m_nMsgCode)
     {
@@ -360,7 +452,15 @@ void CMsgWin::PopUp(int nMsgCode, wchar_t* pszMsg)
         lpszMsg = I18N::Game::YourIndividualSubscriptionTermIsOver;
         break;
     case RECEIVE_LOG_IN_FAIL_USER_TIME2:
-        lpszMsg = I18N::Game::YourIndividualSubscriptionTimeIsOver;
+        if (g_ServerListManager != nullptr && g_ServerListManager->IsSelectedPvpServer())
+        {
+            lpszMsg = L"Servidor PVP exige no minimo 20 Azoth.";
+            lpszMsg2 = L"Obtenha Azoth na sua conta e tente novamente.";
+        }
+        else
+        {
+            lpszMsg = I18N::Game::YourIndividualSubscriptionTimeIsOver;
+        }
         break;
     case RECEIVE_LOG_IN_FAIL_PC_TIME1:
         lpszMsg = I18N::Game::SubscriptionTermIsOverOnYourIP;
@@ -396,7 +496,7 @@ void CMsgWin::PopUp(int nMsgCode, wchar_t* pszMsg)
         eType = MWT_BTN_BOTH;
         break;
     case MESSAGE_DELETE_CHARACTER_RESIDENT:
-        lpszMsg = I18N::Game::PleaseEnterYourWEBZENCOMPassword;
+        lpszMsg = L"Digite a senha da sua conta.";
         eType = MWT_STR_INPUT;
         InitResidentNumInput();
         break;
@@ -404,11 +504,14 @@ void CMsgWin::PopUp(int nMsgCode, wchar_t* pszMsg)
         lpszMsg = I18N::Game::TheCharacterIsItemBlocked;
         break;
     case MESSAGE_STORAGE_RESIDENTWRONG:
-        lpszMsg = I18N::Game::ThePasswordYouHaveEnteredIsIncorrect;
+        lpszMsg = L"Senha da conta incorreta.";
         break;
     case MESSAGE_DELETE_CHARACTER_SUCCESS:
-        CharactersClient[SelectedHero].Object.Live = false;
-        DeleteMount(&CharactersClient[SelectedHero].Object);
+        if (SelectedHero >= 0 && SelectedHero < AccountCharacterList::NativeVisibleSlots)
+        {
+            CharactersClient[SelectedHero].Object.Live = false;
+            DeleteMount(&CharactersClient[SelectedHero].Object);
+        }
         SelectedHero = -1;
         rUIMng.m_CharSelMainWin.UpdateDisplay();
         rUIMng.m_CharInfoBalloonMng.UpdateDisplay();
@@ -433,6 +536,11 @@ void CMsgWin::PopUp(int nMsgCode, wchar_t* pszMsg)
     case RECEIVE_CREATE_CHARACTER_FAIL2:
         rUIMng.ShowWin(&rUIMng.m_CharMakeWin);
         lpszMsg = I18N::Game::NoMoreCharactersCanBeCreated;
+        break;
+    case RECEIVE_CREATE_CHARACTER_EXCLUSIVE_NAME:
+        m_exclusiveNameStoreUrl = BuildExclusiveNameStoreUrl(InputText[0]);
+        lpszMsg = L"Nome exclusivo. OK abre a loja:";
+        lpszMsg2 = L"https://muonline.pt/store";
         break;
     default:
         m_nMsgCode = -1;
@@ -489,6 +597,13 @@ void CMsgWin::ManageOKClick()
         RequestDeleteCharacter();
         PopUp(MESSAGE_WAIT);
         break;
+    case RECEIVE_CREATE_CHARACTER_EXCLUSIVE_NAME:
+        if (!m_exclusiveNameStoreUrl.empty())
+        {
+            ShellExecuteW(g_hWnd, L"open", m_exclusiveNameStoreUrl.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        }
+        rUIMng.ShowWin(&rUIMng.m_CharMakeWin);
+        break;
     }
 }
 
@@ -519,6 +634,11 @@ void CMsgWin::InitResidentNumInput()
 
 void CMsgWin::RequestDeleteCharacter()
 {
+    if (SelectedHero < 0 || SelectedHero >= AccountCharacterList::NativeVisibleSlots)
+    {
+        return;
+    }
+
     if (g_iChatInputType == 1)
     {
         g_pSinglePasswdInputBox->GetText(InputText[0]);

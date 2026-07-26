@@ -30,6 +30,7 @@ namespace SEASON3B
 
     public:
         void Reset();
+        void LoadCachedOrReset();
         void LoadSavedConfig(const MUHelper::ConfigData& config);
         void AssignSkill(int iSkill);
         static int GetIntFromTextInput(wchar_t* pstrInput);
@@ -173,7 +174,11 @@ namespace SEASON3B
         
         void InitConfig();
         void SaveConfig();
-        void ApplyConfig();
+        void ApplyConfig(bool bSyncUi = true);
+        void SyncConfigToControls();
+        bool SetCheckBoxState(int iCheckboxId, bool bState);
+        bool TryGetCheckBoxState(int iCheckboxId, bool& bState) const;
+        void SyncConfigFromControls();
 
         void LoadImages();
         void UnloadImages();
@@ -182,6 +187,8 @@ namespace SEASON3B
         void ApplyConfigFromSkillSlot(int iSlot, int iSkill);
         void ApplyHuntRangeUpdate(int iDelta);
         void ApplyLootRangeUpdate(int iDelta);
+        void ApplyMinimumOptionUpdate(int iDelta);
+        void ApplyAutoPointPercentUpdate(int iPointIndex, int iDelta);
         void SaveExtraItem();
         void RemoveExtraItem();
 

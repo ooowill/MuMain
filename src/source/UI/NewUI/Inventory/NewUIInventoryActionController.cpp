@@ -467,6 +467,7 @@ bool CNewUIInventoryActionController::RepairItemAtMousePoint(CNewUIInventoryCtrl
 
 bool CNewUIInventoryActionController::ApplyJewels(CNewUIInventoryCtrl* targetControl, CNewUIPickedItem* pPickedItem, ITEM* pPickItem, int iSourceIndex, int iTargetIndex) const
 {
+    const bool bIsCustomJewel = IsCustomJewelItemType(pPickItem->Type);
     const bool bIsJewelType =
         pPickItem->Type == ITEM_JEWEL_OF_BLESS
         || pPickItem->Type == ITEM_JEWEL_OF_SOUL
@@ -475,7 +476,8 @@ bool CNewUIInventoryActionController::ApplyJewels(CNewUIInventoryCtrl* targetCon
         || pPickItem->Type == ITEM_LOWER_REFINE_STONE
         || pPickItem->Type == ITEM_HIGHER_REFINE_STONE
         || pPickItem->Type == ITEM_POTION + 160
-        || pPickItem->Type == ITEM_POTION + 161;
+        || pPickItem->Type == ITEM_POTION + 161
+        || bIsCustomJewel;
 
     if (!bIsJewelType)
     {
@@ -494,7 +496,11 @@ bool CNewUIInventoryActionController::ApplyJewels(CNewUIInventoryCtrl* targetCon
 
     bool bSuccess = true;
 
-    if (iType > ITEM_WINGS_OF_DARKNESS
+    if (bIsCustomJewel)
+    {
+        bSuccess = IsCustomJewelTargetType(iType);
+    }
+    else if (iType > ITEM_WINGS_OF_DARKNESS
         && iType != ITEM_CAPE_OF_LORD
         && !(iType >= ITEM_WING_OF_STORM && iType <= ITEM_WING_OF_DIMENSION)
         && !(ITEM_WING + 130 <= iType && iType <= ITEM_WING + 134)

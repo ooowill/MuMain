@@ -49,6 +49,8 @@ namespace SEASON3B
             IMAGE_INVENTORY_EXIT_BTN, //"newui_exit_00.tga"
             IMAGE_INVENTORY_REPAIR_BTN, //"newui_repair_00.tga"
             IMAGE_INVENTORY_EXPAND_BTN, //"newui_expansion_btn.tga"
+            IMAGE_INVENTORY_POWER_ICON, //"i_attack.tga"
+            IMAGE_INVENTORY_POWER_DIGITS, //"Azoth/azoth_digits.tga"
         };
 
         enum MYSHOP_MODE
@@ -193,6 +195,7 @@ namespace SEASON3B
         void RenderEquippedItem();
         void RenderButtons();
         void RenderInventoryDetails() const;
+        void RenderCharacterPowerScore() const;
 
         bool EquipmentWindowProcess();
         bool InventoryProcess() const;

@@ -9,60 +9,119 @@
 #include "Engine/Object/ZzzInfomation.h"
 #include "Network/Server/SocketSystem.h"
 
+#include <algorithm>
+
 using namespace SEASON3B;
+
+namespace
+{
+    int SanitizeItemLevel(int level)
+    {
+        return std::clamp(level, 0, 15);
+    }
+
+    bool IsValidItemType(int itemType)
+    {
+        return itemType >= 0 && itemType < MAX_ITEM;
+    }
+
+    bool TryReadItemByte(std::span<const BYTE> itemData, size_t& offset, BYTE& value)
+    {
+        if (offset >= itemData.size())
+        {
+            return false;
+        }
+
+        value = itemData[offset++];
+        return true;
+    }
+}
 
 ItemCreationParams ParseItemData(std::span<const BYTE> itemData)
 {
     ItemCreationParams params = { };
+    params.SocketBonusOption = SOCKET_EMPTY;
+    std::fill_n(params.SocketOptions, MAX_SOCKETS, SOCKET_EMPTY);
 
     if (itemData.size() < 5)
         return params;
 
     params.Group = (itemData[0] >> 4) & 0xF;
     params.Number = ((itemData[0] & 0xF) << 8) + itemData[1];
-    params.Level = itemData[2];
+    params.Level = static_cast<BYTE>(SanitizeItemLevel(itemData[2]));
     params.Durability = itemData[3];
     auto flags = static_cast<ItemOptionFlags>(itemData[4]);
     params.WithLuck = flags & ItemOptionFlags::HasLuck;
     params.WithSkill = flags & ItemOptionFlags::HasSkill;
+    params.WithOption = flags & ItemOptionFlags::HasOption;
+    params.HasExcellentOption = flags & ItemOptionFlags::HasExcellent;
+    params.IsAncient = flags & ItemOptionFlags::HasAncient;
+    params.HasHarmonyOption = flags & ItemOptionFlags::HasHarmony;
+    params.HasGuardianOption = flags & ItemOptionFlags::HasGuardian;
 
-    int offset = 0;
+    size_t offset = 5;
     if (flags & ItemOptionFlags::HasOption)
     {
-        params.OptionLevel = itemData[5] & 0xF;
-        params.OptionType = (itemData[5] >> 4) & 0xF;
-        offset++;
+        BYTE optionByte = 0;
+        if (!TryReadItemByte(itemData, offset, optionByte))
+        {
+            return params;
+        }
+
+        params.OptionLevel = optionByte & 0xF;
+        params.OptionType = (optionByte >> 4) & 0xF;
     }
 
     if (flags & ItemOptionFlags::HasExcellent)
     {
-        params.ExcellentFlags = itemData[5 + offset];
-        offset++;
+        if (!TryReadItemByte(itemData, offset, params.ExcellentFlags))
+        {
+            return params;
+        }
     }
 
     if (flags & ItemOptionFlags::HasAncient)
     {
-        params.AncientDiscriminator = itemData[5 + offset] & 0xF;
-        params.AncientBonusOption = (itemData[5 + offset] >> 4) & 0xF;
-        offset++;
+        BYTE ancientByte = 0;
+        if (!TryReadItemByte(itemData, offset, ancientByte))
+        {
+            return params;
+        }
+
+        params.AncientDiscriminator = ancientByte & 0xF;
+        params.AncientBonusOption = (ancientByte >> 4) & 0xF;
     }
 
     if (flags & ItemOptionFlags::HasHarmony)
     {
-        params.HasHarmonyOption = true;
-        params.HarmonyOptionLevel = itemData[5 + offset] & 0xF;
-        params.HarmonyOptionType = (itemData[5 + offset] >> 4) & 0xF;
-        offset++;
+        BYTE harmonyByte = 0;
+        if (!TryReadItemByte(itemData, offset, harmonyByte))
+        {
+            return params;
+        }
+
+        params.HarmonyOptionLevel = harmonyByte & 0xF;
+        params.HarmonyOptionType = (harmonyByte >> 4) & 0xF;
     }
 
     if (flags & ItemOptionFlags::HasSockets)
     {
-        params.SocketBonusOption = (itemData[5 + offset] >> 4) & 0xF;
-        params.SocketCount = itemData[5 + offset] & 0xF;
+        BYTE socketHeader = 0;
+        if (!TryReadItemByte(itemData, offset, socketHeader))
+        {
+            return params;
+        }
+
+        params.SocketBonusOption = (socketHeader >> 4) & 0xF;
+        params.SocketCount = std::min<BYTE>(socketHeader & 0xF, MAX_SOCKETS);
 
         for (int i = 0; i < params.SocketCount; ++i)
         {
-            params.SocketOptions[i] = itemData[6 + offset + i];
+            if (!TryReadItemByte(itemData, offset, params.SocketOptions[i]))
+            {
+                params.SocketCount = static_cast<BYTE>(i);
+                return params;
+            }
         }
     }
 
@@ -152,9 +211,16 @@ ITEM* SEASON3B::CNewUIItemMng::CreateItemByParameters(const ItemCreationParams* 
     pNewItem->bPeriodItem = parameters->WithExpiration;
     pNewItem->bExpiredPeriod = parameters->IsExpired;
     // pNewItem->lExpireTime is received by another packet? should we integrate that?
+    const int itemType = parameters->Group * MAX_ITEM_INDEX + parameters->Number;
+    if (!IsValidItemType(itemType) || parameters->Number < 0 || parameters->Number >= MAX_ITEM_INDEX)
+    {
+        delete pNewItem;
+        return nullptr;
+    }
+
     pNewItem->Key = GenerateItemKey();
-    pNewItem->Type = parameters->Group * MAX_ITEM_INDEX + parameters->Number;
-    pNewItem->Level = parameters->Level;
+    pNewItem->Type = itemType;
+    pNewItem->Level = SanitizeItemLevel(parameters->Level);
     pNewItem->Durability = parameters->Durability;
     pNewItem->HasLuck = parameters->WithLuck;
     pNewItem->HasSkill = parameters->WithSkill;
@@ -166,9 +232,12 @@ ITEM* SEASON3B::CNewUIItemMng::CreateItemByParameters(const ItemCreationParams* 
     pNewItem->Jewel_Of_Harmony_Option = parameters->HarmonyOptionType;
     pNewItem->Jewel_Of_Harmony_OptionLevel = parameters->HarmonyOptionLevel;
     pNewItem->option_380 = parameters->HasGuardianOption;
-    pNewItem->SocketCount = parameters->SocketCount;
+    pNewItem->SocketCount = std::min<BYTE>(parameters->SocketCount, MAX_SOCKETS);
     pNewItem->SocketSeedSetOption = parameters->SocketBonusOption;
-    for (int i = 0; i < MAX_SOCKETS; ++i)
+    std::fill_n(pNewItem->bySocketOption, MAX_SOCKETS, SOCKET_EMPTY);
+    std::fill_n(pNewItem->SocketSeedID, MAX_SOCKETS, SOCKET_EMPTY);
+    std::fill_n(pNewItem->SocketSphereLv, MAX_SOCKETS, 0);
+    for (int i = 0; i < pNewItem->SocketCount; ++i)
     {
         pNewItem->bySocketOption[i] = parameters->SocketOptions[i];
         if (pNewItem->bySocketOption[i] == SOCKET_EMPTY)
@@ -206,8 +275,15 @@ ITEM* SEASON3B::CNewUIItemMng::CreateItem(
     memset(pNewItem, 0, sizeof(ITEM));
 
     WORD wType = byType * MAX_ITEM_INDEX + bySubType;
+    if (!IsValidItemType(wType))
+    {
+        delete pNewItem;
+        return nullptr;
+    }
+
     pNewItem->Key = GenerateItemKey();
     pNewItem->Type = wType;
+    pNewItem->Level = SanitizeItemLevel(byLevel);
     pNewItem->Durability = byDurability;
     pNewItem->ExcellentFlags = byOption1;
     pNewItem->AncientDiscriminator = ancientByte & 0x03;
@@ -293,6 +369,12 @@ ITEM* SEASON3B::CNewUIItemMng::CreateItem(
 
 ITEM* SEASON3B::CNewUIItemMng::CreateItem(ITEM* pItem)
 {
+    if (pItem == nullptr)
+    {
+        return nullptr;
+    }
+
+    pItem->Level = SanitizeItemLevel(pItem->Level);
     pItem->RefCount++;
     return pItem;
 }
@@ -302,6 +384,7 @@ ITEM* SEASON3B::CNewUIItemMng::DuplicateItem(ITEM* pItem)
     ITEM* pNewItem = new ITEM;
     memcpy(pNewItem, pItem, sizeof(ITEM));
     pNewItem->Key = GenerateItemKey();
+    pNewItem->Level = SanitizeItemLevel(pNewItem->Level);
     pNewItem->RefCount = 1;
     m_listItem.push_back(pNewItem);
     return pNewItem;

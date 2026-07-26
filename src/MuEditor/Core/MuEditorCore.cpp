@@ -12,6 +12,7 @@
 #include "../MuEditor/UI/ItemEditor/MuItemEditorUI.h"
 #include "../MuEditor/UI/SkillEditor/MuSkillEditorUI.h"
 #include "../MuEditor/UI/DevEditor/DevEditorUI.h"
+#include "../MuEditor/UI/MapEditor/MuMapEditorUI.h"
 #include "../UI/Common/MuEditorUI.h"
 #include "../UI/Console/MuEditorConsoleUI.h"
 #include "I18N/All.h"
@@ -63,7 +64,8 @@ CMuEditorCore::CMuEditorCore()
     , m_bShowItemEditor(false)
     , m_bShowSkillEditor(false)
     , m_bShowDevEditor(false)
-    , m_bShowConsole(true)
+    , m_bShowMapEditor(true)
+    , m_bShowConsole(false)
     , m_bHoveringUI(false)
     , m_bPreviousFrameHoveringUI(false)
 {
@@ -461,7 +463,13 @@ void CMuEditorCore::Render()
     m_bHoveringUI = false;
 
     // Render toolbar (handles both open and closed states)
-    g_MuEditorUI.RenderToolbar(m_bEditorMode, m_bShowItemEditor, m_bShowSkillEditor, m_bShowDevEditor, m_bShowConsole);
+    g_MuEditorUI.RenderToolbar(
+        m_bEditorMode,
+        m_bShowItemEditor,
+        m_bShowSkillEditor,
+        m_bShowDevEditor,
+        m_bShowMapEditor,
+        m_bShowConsole);
 
     if (m_bEditorMode)
     {
@@ -472,6 +480,11 @@ void CMuEditorCore::Render()
         if (m_bShowDevEditor)
         {
             g_DevEditorUI.Render(&m_bShowDevEditor);
+        }
+
+        if (m_bShowMapEditor)
+        {
+            g_MuMapEditorUI.Render(&m_bShowMapEditor);
         }
 
         // Render console (if enabled)

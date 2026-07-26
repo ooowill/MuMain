@@ -10,6 +10,9 @@
 #include <dpapi.h>
 #endif
 #include <clocale>
+#include <cctype>
+#include <cstdlib>
+#include <string>
 #include "Data/GameConfig/GameConfig.h"
 #include "UI/Legacy/UIWindows.h"
 #include "UI/Legacy/UIManager.h"
@@ -42,6 +45,8 @@
 
 #include "MUHelper/MuHelper.h"
 #include "Camera/CameraManager.h"
+#include "Character/AccountCompanionClient.h"
+#include "Character/AccountCharacterPaging.h"
 
 #include "UI/Windows/CBTMessageBox.h"
 #ifdef _WIN32
@@ -74,6 +79,73 @@
 #include "imgui_impl_sdl3.h"
 #include "../MuEditor/Config/MuEditorConfig.h"
 #endif
+
+namespace
+{
+void ConfigureJpegDecoder()
+{
+    // Avoid the 32-bit libjpeg-turbo MMX path, which can crash during login texture decode.
+#ifdef _WIN32
+    _putenv_s("JSIMD_FORCENONE", "1");
+#else
+    setenv("JSIMD_FORCENONE", "1", 1);
+#endif
+}
+
+#ifdef _WIN32
+bool IsSafeAntiCheatPipeName(const std::string& value)
+{
+    if (value.empty() || value.size() > 96 || value.rfind("muonline-ac-", 0) != 0)
+    {
+        return false;
+    }
+
+    for (const auto character : value)
+    {
+        const auto byte = static_cast<unsigned char>(character);
+        if (!std::isalnum(byte) && character != '-' && character != '_')
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool HasLauncherAntiCheatPipe()
+{
+    char* pipeNameRaw = nullptr;
+    std::size_t pipeNameLength = 0;
+    if (_dupenv_s(&pipeNameRaw, &pipeNameLength, "MUONLINE_AC_PIPE") != 0 || pipeNameRaw == nullptr)
+    {
+        return false;
+    }
+
+    const std::string pipeName(pipeNameRaw);
+    free(pipeNameRaw);
+    if (!IsSafeAntiCheatPipeName(pipeName))
+    {
+        return false;
+    }
+
+    std::wstring pipePath = L"\\\\.\\pipe\\";
+    pipePath.reserve(pipePath.size() + pipeName.size());
+    for (const auto character : pipeName)
+    {
+        pipePath.push_back(static_cast<wchar_t>(static_cast<unsigned char>(character)));
+    }
+
+    return WaitNamedPipeW(pipePath.c_str(), 3000) != FALSE;
+}
+
+#ifdef _EDITOR
+bool IsCharacterMapEditorLaunch()
+{
+    return wcsstr(GetCommandLineW(), L"--character-map-editor") != nullptr;
+}
+#endif
+#endif
+}
 
 CUIMercenaryInputBox* g_pMercenaryInputBox = nullptr;
 CUITextInputBox* g_pSingleTextInputBox = nullptr;
@@ -512,6 +584,35 @@ extern bool EnableFastInput;
 #ifdef _WIN32
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
+    if (msg == AccountCompanionClient::WindowsMessage)
+    {
+        AccountCompanionClient::HandleExternalAction(static_cast<int>(wParam), static_cast<int>(lParam));
+        return 0;
+    }
+
+    constexpr UINT WM_MU_CHARACTER_PAGE_ACTION = 0x8472;
+    if (msg == WM_MU_CHARACTER_PAGE_ACTION)
+    {
+        bool pageChanged = false;
+        if (static_cast<int>(wParam) == 1)
+        {
+            pageChanged = AccountCharacterPaging::PreviousPage();
+        }
+        else if (static_cast<int>(wParam) == 2)
+        {
+            pageChanged = AccountCharacterPaging::NextPage();
+        }
+
+        if (pageChanged)
+        {
+            CUIMng& uiManager = CUIMng::Instance();
+            uiManager.m_CharSelMainWin.UpdateDisplay();
+            uiManager.m_CharInfoBalloonMng.UpdateDisplay();
+        }
+
+        return 0;
+    }
+
     // F10 zoom-lock toggle. Handled before the ImGui forwarder so editor-open
     // sessions still get the toggle (ImGui captures keyboard messages while a
     // window has focus). Bit 30 of lParam = previous key state — skip
@@ -636,12 +737,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 wchar_t m_Username[11];
 wchar_t m_Password[21];
+wchar_t g_WebStoreTicket[65];
 wchar_t m_Version[11];
 wchar_t m_ExeVersion[11];
 int  m_SoundOnOff;
 int  m_MusicOnOff;
 int  m_Resolution;
 int m_RememberMe;
+int m_AutoLoginOnce;
 
 wchar_t g_aszMLSelection[MAX_LANGUAGE_NAME_LENGTH] = { '\0' };
 
@@ -701,6 +804,83 @@ BOOL GetConnectServerInfo(wchar_t* szCmdLine, wchar_t* lpszURL, WORD* pwPort)
     *pwPort = static_cast<WORD>(std::stoi(lpszTemp));
 
     return TRUE;
+}
+
+bool TryReadCommandInt(wchar_t option, int minValue, int maxValue, int& value)
+{
+    std::wstring raw;
+    if (!Util_CheckOption(GetCommandLineW(), option, raw) || raw.empty())
+    {
+        return false;
+    }
+
+    wchar_t* end = nullptr;
+    const long parsed = wcstol(raw.c_str(), &end, 10);
+    if (end == raw.c_str() || *end != L'\0' || parsed < minValue || parsed > maxValue)
+    {
+        return false;
+    }
+
+    value = static_cast<int>(parsed);
+    return true;
+}
+
+std::wstring NormalizeCommandLocale(std::wstring locale)
+{
+    for (wchar_t& ch : locale)
+    {
+        if (ch >= L'A' && ch <= L'Z')
+        {
+            ch = static_cast<wchar_t>(ch - L'A' + L'a');
+        }
+    }
+
+    const size_t separator = locale.find_first_of(L"-_");
+    if (separator != std::wstring::npos)
+    {
+        locale = locale.substr(0, separator);
+    }
+
+    if (locale == L"eng")
+        return L"en";
+    if (locale == L"por")
+        return L"pt";
+    if (locale == L"spn" || locale == L"spa")
+        return L"es";
+    if (locale == L"kor")
+        return L"ko";
+    if (locale == L"jpn")
+        return L"ja";
+    if (locale == L"ukr")
+        return L"uk";
+    if (locale == L"heb")
+        return L"he";
+    if (locale == L"ger" || locale == L"deu")
+        return L"de";
+    if (locale == L"ita")
+        return L"it";
+    if (locale == L"fre" || locale == L"fra")
+        return L"fr";
+    if (locale == L"pol")
+        return L"pl";
+
+    if (locale == L"ko" || locale == L"es" || locale == L"pl" || locale == L"ja" ||
+        locale == L"uk" || locale == L"he" || locale == L"de" || locale == L"en" ||
+        locale == L"pt" || locale == L"it" || locale == L"fr")
+    {
+        return locale;
+    }
+
+    return L"en";
+}
+
+std::wstring GetLegacyLanguageForUILocale(const std::wstring& locale)
+{
+    if (locale == L"pt")
+        return L"Por";
+    if (locale == L"es")
+        return L"Spn";
+    return L"Eng";
 }
 
 extern int TimeRemain;
@@ -1370,6 +1550,26 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLin
 int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLine, int nCmdShow)
 #endif
 {
+    ConfigureJpegDecoder();
+
+#ifdef _WIN32
+    const bool requiresLauncher =
+#ifdef _EDITOR
+        !IsCharacterMapEditorLaunch();
+#else
+        true;
+#endif
+    if (requiresLauncher && !HasLauncherAntiCheatPipe())
+    {
+        MessageBoxW(
+            nullptr,
+            L"Abra o jogo pelo launcher oficial.",
+            L"MU Online",
+            MB_OK | MB_ICONERROR);
+        return 0;
+    }
+#endif
+
     wchar_t lpszExeVersion[256] = L"unknown";
 
     wchar_t* lpszCommandLine = GetCommandLine();
@@ -1428,10 +1628,12 @@ int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLine, int nC
 
     m_Username[0] = '\0';
     m_Password[0] = '\0';
+    g_WebStoreTicket[0] = '\0';
     m_SoundOnOff = 1;
     m_MusicOnOff = 1;
     m_Resolution = 0;
     m_RememberMe = 0;
+    m_AutoLoginOnce = 0;
 
     g_iChatInputType = 1;
 
@@ -1439,6 +1641,41 @@ int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLine, int nC
     WindowWidth = GameConfig::GetInstance().GetWindowWidth();
     WindowHeight = GameConfig::GetInstance().GetWindowHeight();
     g_bUseWindowMode = GameConfig::GetInstance().GetWindowMode() ? TRUE : FALSE;
+
+    int commandWidth = 0;
+    int commandHeight = 0;
+    const bool hasCommandSize =
+        TryReadCommandInt(L'w', 640, 7680, commandWidth) &&
+        TryReadCommandInt(L'h', 480, 4320, commandHeight);
+    if (hasCommandSize)
+    {
+        WindowWidth = static_cast<unsigned int>(commandWidth);
+        WindowHeight = static_cast<unsigned int>(commandHeight);
+        GameConfig::GetInstance().SetWindowSize(commandWidth, commandHeight);
+    }
+
+    int commandWindowMode = 0;
+    const bool hasCommandWindowMode = TryReadCommandInt(L'm', 0, 1, commandWindowMode);
+    if (hasCommandWindowMode)
+    {
+        g_bUseWindowMode = commandWindowMode != 0 ? TRUE : FALSE;
+        GameConfig::GetInstance().SetWindowMode(commandWindowMode != 0);
+    }
+
+    std::wstring commandLocale;
+    const bool hasCommandLocale = Util_CheckOption(GetCommandLineW(), L'l', commandLocale) && !commandLocale.empty();
+    if (hasCommandLocale)
+    {
+        const std::wstring uiLocale = NormalizeCommandLocale(commandLocale);
+        GameConfig::GetInstance().SetUILocale(uiLocale);
+        GameConfig::GetInstance().SetLanguageSelection(GetLegacyLanguageForUILocale(uiLocale));
+    }
+
+    if (hasCommandSize || hasCommandWindowMode || hasCommandLocale)
+    {
+        GameConfig::GetInstance().Save();
+    }
+
     g_bUseFullscreenMode = !g_bUseWindowMode;
 
     // Apply audio settings from INI — volume 0 = off, >0 = on
@@ -1454,6 +1691,33 @@ int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLine, int nC
     if (m_RememberMe)
     {
         GameConfig::GetInstance().DecryptCredentials(m_Username, m_Password, _countof(m_Username), _countof(m_Password));
+    }
+
+    std::wstring commandAccount;
+    std::wstring commandTicket;
+    if (Util_CheckOption(GetCommandLineW(), L'a', commandAccount)
+        && Util_CheckOption(GetCommandLineW(), L't', commandTicket)
+        && !commandAccount.empty()
+        && !commandTicket.empty()
+        && commandAccount.length() <= MAX_USERNAME_SIZE
+        && commandTicket.length() <= MAX_PASSWORD_SIZE)
+    {
+        std::wstring commandAutoLogin;
+        wcsncpy_s(m_Username, _countof(m_Username), commandAccount.c_str(), _TRUNCATE);
+        wcsncpy_s(m_Password, _countof(m_Password), commandTicket.c_str(), _TRUNCATE);
+        m_RememberMe = 0;
+        m_AutoLoginOnce = Util_CheckOption(GetCommandLineW(), L'g', commandAutoLogin)
+            && commandAutoLogin != L"0"
+            ? 1
+            : 0;
+    }
+
+    std::wstring commandStoreTicket;
+    if (Util_CheckOption(GetCommandLineW(), L's', commandStoreTicket)
+        && !commandStoreTicket.empty()
+        && commandStoreTicket.length() < _countof(g_WebStoreTicket))
+    {
+        wcsncpy_s(g_WebStoreTicket, _countof(g_WebStoreTicket), commandStoreTicket.c_str(), _TRUNCATE);
     }
 
     g_fScreenRate_x = (float)WindowWidth / (float)REFERENCE_WIDTH;

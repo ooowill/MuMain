@@ -19,6 +19,7 @@
 #include "Engine/Object/ZzzObject.h"
 #include "Engine/Object/ZzzCharacter.h"
 #include "Engine/Object/PlayerActionState.h"
+#include "Character/AccountCompanionClient.h"
 #include "Render/Terrain/ZzzLodTerrain.h"
 #include "Render/Textures/ZzzTexture.h"
 #include "Engine/AI/ZzzAI.h"
@@ -29,6 +30,7 @@
 #include "Scenes/SceneCore.h"
 #include "Audio/DSPlaySound.h"
 #include "I18N/All.h"
+#include "Data/GameConfig/GameConfig.h"
 
 #include "Engine/Physics/PhysicsManager.h"
 #include "Engine/AI/GOBoid.h"
@@ -51,6 +53,47 @@ namespace
     // Character selection screen: generous axis-aligned pick box dimensions.
     constexpr float CHARSCENE_PICK_MIN_HEIGHT = 300.0f;
     constexpr float CHARSCENE_PICK_HALF_WIDTH = 72.0f;
+    constexpr int LORENCIA_JEWEL_SELLER_TILE_X = 121;
+    constexpr int LORENCIA_JEWEL_SELLER_TILE_Y = 123;
+    constexpr int LORENCIA_JEWEL_SELLER_TILE_RADIUS = 7;
+    constexpr wchar_t LORENCIA_JEWEL_SELLER_NAME[] = L"Joalheiro";
+
+    bool IsLorenciaJewelSellerWanderingNpc(const CHARACTER* character)
+    {
+        if (character == nullptr || gMapManager.WorldActive != WD_0LORENCIA)
+            return false;
+
+        switch (character->MonsterIndex)
+        {
+        case MONSTER_WANDERING_MERCHANT_MARTIN:
+        case MONSTER_WANDERING_MERCHANT_HAROLD:
+        case MONSTER_WANDERING_MERCHANT_ZYRO:
+            break;
+        default:
+            return false;
+        }
+
+        const int dx = static_cast<int>(character->PositionX) - LORENCIA_JEWEL_SELLER_TILE_X;
+        const int dy = static_cast<int>(character->PositionY) - LORENCIA_JEWEL_SELLER_TILE_Y;
+        return (dx * dx) + (dy * dy) <= LORENCIA_JEWEL_SELLER_TILE_RADIUS * LORENCIA_JEWEL_SELLER_TILE_RADIUS;
+    }
+
+    void SetLorenciaJewelSellerName(CHARACTER* character)
+    {
+        if (character == nullptr || !IsLorenciaJewelSellerWanderingNpc(character))
+            return;
+
+        wcsncpy_s(character->ID, MAX_USERNAME_SIZE + 1, LORENCIA_JEWEL_SELLER_NAME, _TRUNCATE);
+    }
+
+    void RenderLorenciaJewelSellerPickProxy(CHARACTER* character, OBJECT* object)
+    {
+        if (character == nullptr || object == nullptr || Models[object->Type].NumActions == 0)
+            return;
+
+        constexpr bool translate = true;
+        Calc_RenderObject(object, translate, 0, 0);
+    }
 }
 
 void BuildCharacterScenePickOBB(const OBJECT* o, OBB_t& outOBB)
@@ -4620,7 +4663,8 @@ void MoveCharacter(CHARACTER* c, OBJECT* o)
                 }
                 else if (p_temp_c->Object.Live == TRUE && p_temp_c->Object.Kind == KIND_PLAYER && p_temp_c->Object.CurrentAction != PLAYER_DIE1)
                 {
-                    if (CheckAttack_Fenrir(p_temp_c) == true && CInput::Instance().IsKeyDown(VK_LCONTROL))
+                    if (CheckAttack_Fenrir(p_temp_c) == true
+                        && IsPvpServerAutoAttackTarget(p_temp_c, i))
                     {
                         float dx = c->Object.Position[0] - p_temp_c->Object.Position[0];
                         float dy = c->Object.Position[1] - p_temp_c->Object.Position[1];
@@ -6545,10 +6589,71 @@ void RenderBrightEffect(BMD* b, int Bitmap, int Link, float Scale, vec3_t Light,
 
 OBJECT g_ItemObject[ITEM_ETC + MAX_ITEM_INDEX];
 
+static bool IsGamePerformanceWingItem(int type)
+{
+    if (type >= MODEL_WING && type <= MODEL_WINGS_OF_DARKNESS)
+    {
+        return true;
+    }
+
+    if (type >= MODEL_WING_OF_STORM && type <= MODEL_WING_OF_DIMENSION)
+    {
+        return true;
+    }
+
+    if (type >= MODEL_CAPE_OF_FIGHTER && type <= MODEL_CAPE_OF_OVERRULE)
+    {
+        return true;
+    }
+
+    return type == MODEL_CAPE_OF_LORD
+        || type == MODEL_CAPE_OF_EMPEROR
+        || type == MODEL_WING + 130
+        || type == MODEL_WING + 131
+        || type == MODEL_WING + 132
+        || type == MODEL_WING + 133
+        || type == MODEL_WING + 134
+        || type == MODEL_WING + 135;
+}
+
+static bool IsGamePerformanceHelperItem(int type)
+{
+    switch (type)
+    {
+    case MODEL_GUARDIAN_ANGEL:
+    case MODEL_IMP:
+    case MODEL_HORN_OF_UNIRIA:
+    case MODEL_HORN_OF_DINORANT:
+    case MODEL_DARK_HORSE_ITEM:
+    case MODEL_DARK_RAVEN_ITEM:
+    case MODEL_HORN_OF_FENRIR:
+    case MODEL_DEMON:
+    case MODEL_SPIRIT_OF_GUARDIAN:
+    case MODEL_PET_RUDOLF:
+    case MODEL_PET_PANDA:
+    case MODEL_PET_UNICORN:
+    case MODEL_PET_SKELETON:
+        return true;
+    default:
+        return false;
+    }
+}
+
 void RenderLinkObject(float x, float y, float z, CHARACTER* c, PART_t* f, int Type, int Level, int Option1, bool Link, bool Translate, int RenderType, bool bRightHandItem)
 {
     OBJECT* o = &c->Object;
     BMD* b = &Models[Type];
+
+    const GameConfig& gameConfig = GameConfig::GetInstance();
+    if (gameConfig.GetHideWings() && IsGamePerformanceWingItem(Type))
+    {
+        return;
+    }
+
+    if (gameConfig.GetHideMountsPets() && IsGamePerformanceHelperItem(Type))
+    {
+        return;
+    }
 
     if (o->SubType == MODEL_CURSEDTEMPLE_ALLIED_PLAYER || o->SubType == MODEL_CURSEDTEMPLE_ILLUSION_PLAYER)
     {
@@ -8311,7 +8416,10 @@ void RenderLinkObject(float x, float y, float z, CHARACTER* c, PART_t* f, int Ty
         break;
     }
 
-    if (gMapManager.WorldActive != WD_10HEAVEN && gMapManager.InHellas() == FALSE && !g_Direction.m_CKanturu.IsMayaScene())
+    if (gMapManager.WorldActive != WD_74NEW_CHARACTER_SCENE
+        && gMapManager.WorldActive != WD_10HEAVEN
+        && gMapManager.InHellas() == FALSE
+        && !g_Direction.m_CKanturu.IsMayaScene())
     {
         switch (Type)        // 날개인지 검사
         {
@@ -8496,7 +8604,9 @@ void RenderCharacter(CHARACTER* c, OBJECT* o, int Select)
     if (byRender == CHARACTER_ANIMATION)
         Calc_ObjectAnimation(o, Translate, Select);
 
-    if (o->Alpha >= 0.5f && c->HideShadow == false)
+    if (gMapManager.WorldActive != WD_74NEW_CHARACTER_SCENE
+        && o->Alpha >= 0.5f
+        && c->HideShadow == false)
     {
         if (gMapManager.WorldActive != WD_10HEAVEN && (o->Type == MODEL_PLAYER) && (!(MODEL_HORN_OF_UNIRIA <= c->Helper.Type && c->Helper.Type <= MODEL_HORN_OF_DINORANT) || c->SafeZone)
             && gMapManager.InHellas() == false
@@ -9090,6 +9200,11 @@ void RenderCharacter(CHARACTER* c, OBJECT* o, int Select)
     }
 
     if (gMapManager.InChaosCastle() == true)
+    {
+        bCloak = false;
+    }
+
+    if (GameConfig::GetInstance().GetHideWings() && o->Type == MODEL_PLAYER)
     {
         bCloak = false;
     }
@@ -11305,7 +11420,10 @@ void RenderCharacter(CHARACTER* c, OBJECT* o, int Select)
         }
     }
 
-    giPetManager::RenderPet(c);
+    if (!GameConfig::GetInstance().GetHideMountsPets())
+    {
+        giPetManager::RenderPet(c);
+    }
 
     if (gCharacterManager.GetBaseClass(c->Class) == CLASS_SUMMONER)
     {
@@ -11314,16 +11432,107 @@ void RenderCharacter(CHARACTER* c, OBJECT* o, int Select)
     }
 }
 
+void RenderSimplifiedPlayerCharacter(CHARACTER* c, OBJECT* o, int Select)
+{
+    if (c == nullptr || o == nullptr || o->Type != MODEL_PLAYER || Models[o->Type].NumActions == 0)
+    {
+        return;
+    }
+
+    constexpr bool Translate = true;
+    Calc_ObjectAnimation(o, Translate, Select);
+
+    vec3_t light;
+    if (SceneFlag == CHARACTER_SCENE)
+    {
+        Vector(0.4f, 0.4f, 0.4f, light);
+    }
+    else
+    {
+        RequestTerrainLight(o->Position[0], o->Position[1], light);
+    }
+
+    VectorAdd(light, o->Light, c->Light);
+
+    const float previousAlpha = o->Alpha;
+    const float previousAlphaTarget = o->AlphaTarget;
+    const bool previousEnableShadow = o->EnableShadow;
+    const bool previousRenderShadow = o->m_bRenderShadow;
+    const int previousBlendMesh = o->BlendMesh;
+    const float previousBlendMeshLight = o->BlendMeshLight;
+    const int previousHiddenMesh = o->HiddenMesh;
+
+    o->Alpha = 1.f;
+    o->AlphaTarget = 1.f;
+    o->EnableShadow = false;
+    o->m_bRenderShadow = false;
+    o->BlendMesh = -1;
+    o->BlendMeshLight = 1.f;
+    o->HiddenMesh = -1;
+
+    const int baseClass = gCharacterManager.GetBaseClass(c->Class);
+    const int baseBodyParts[MAX_BODYPART] =
+    {
+        -1,
+        static_cast<int>(MODEL_BODY_HELM) + c->SkinIndex,
+        static_cast<int>(MODEL_BODY_ARMOR) + c->SkinIndex,
+        static_cast<int>(MODEL_BODY_PANTS) + c->SkinIndex,
+        static_cast<int>(MODEL_BODY_GLOVES) + c->SkinIndex,
+        static_cast<int>(MODEL_BODY_BOOTS) + c->SkinIndex,
+    };
+
+    for (int part = MAX_BODYPART - 1; part >= 1; --part)
+    {
+        PART_t simplePart = c->BodyPart[part];
+        simplePart.Type = baseBodyParts[part];
+        simplePart.Level = 0;
+        simplePart.ExcellentFlags = 0;
+        simplePart.AncientDiscriminator = 0;
+
+        BMD* bodyModel = &Models[simplePart.Type];
+        if (baseClass == CLASS_RAGEFIGHTER)
+        {
+            bodyModel->Skin = baseClass * 2 + gCharacterManager.IsThirdClass(c->Class);
+        }
+        else
+        {
+            bodyModel->Skin = baseClass * 2 + gCharacterManager.IsSecondClass(c->Class);
+        }
+
+        RenderPartObject(&c->Object, simplePart.Type, &simplePart, c->Light, 1.f, 0, 0, 0, false, false, Translate, Select, RENDER_TEXTURE);
+    }
+
+    o->Alpha = previousAlpha;
+    o->AlphaTarget = previousAlphaTarget;
+    o->EnableShadow = previousEnableShadow;
+    o->m_bRenderShadow = previousRenderShadow;
+    o->BlendMesh = previousBlendMesh;
+    o->BlendMeshLight = previousBlendMeshLight;
+    o->HiddenMesh = previousHiddenMesh;
+}
+
 void RenderCharactersClient()
 {
 #ifdef _EDITOR
     s_bShowCharacterPickBoxes = DevEditor_ShouldShowCharacterPickBoxes();
 #endif
 
+    const bool simplifyOtherPlayers = GameConfig::GetInstance().GetSimplifyOtherPlayers();
+
     for (int i = 0; i < MAX_CHARACTERS_CLIENT; ++i)
     {
         CHARACTER* c = &CharactersClient[i];
         OBJECT* o = &c->Object;
+
+        if (AccountCompanionClient::ShouldSuppressServerDrivenRender(i))
+        {
+            if (Hero != nullptr && Hero->TargetCharacter == c->Key)
+            {
+                Hero->TargetCharacter = -1;
+            }
+
+            continue;
+        }
 
         if (c != Hero && battleCastle::IsBattleCastleStart() == true && g_isCharacterBuff(o, eBuff_Cloaking))
         {
@@ -11377,12 +11586,20 @@ void RenderCharactersClient()
         {
             if (o->Visible)
             {
-                if (i != SelectedCharacter && i != SelectedNpc)
+                const bool isSelected = (i == SelectedCharacter || i == SelectedNpc);
+                if (IsLorenciaJewelSellerWanderingNpc(c))
+                {
+                    SetLorenciaJewelSellerName(c);
+                    RenderLorenciaJewelSellerPickProxy(c, o);
+                }
+                else if (simplifyOtherPlayers && c != Hero && o->Type == MODEL_PLAYER && o->Kind == KIND_PLAYER)
+                    RenderSimplifiedPlayerCharacter(c, o, isSelected);
+                else if (!isSelected)
                     RenderCharacter(c, o);
                 else
                     RenderCharacter(c, o, true);
 
-                if (o->Type == MODEL_PLAYER)
+                if (o->Type == MODEL_PLAYER && !(simplifyOtherPlayers && c != Hero && o->Kind == KIND_PLAYER))
                     battleCastle::CreateBattleCastleCharacter_Visual(c, o);
 
 #ifdef _EDITOR
@@ -12035,10 +12252,11 @@ void SetCharacterScale(CHARACTER* c)
 
     if (SceneFlag == CHARACTER_SCENE)
     {
+        constexpr float kSelectionPreviewScaleMultiplier = 1.5f;
         switch (gCharacterManager.GetBaseClass(c->Class))
         {
-        case CLASS_RAGEFIGHTER:	c->Object.Scale = 1.35f; break;
-        default: c->Object.Scale = 1.2f; break;
+        case CLASS_RAGEFIGHTER:	c->Object.Scale = 1.35f * kSelectionPreviewScaleMultiplier; break;
+        default: c->Object.Scale = 1.2f * kSelectionPreviewScaleMultiplier; break;
         }
     }
     else
@@ -13049,11 +13267,33 @@ namespace
 
         return KIND_MONSTER;
     }
+
+    bool IsValidClientCharacter(const CHARACTER* character)
+    {
+        return character != nullptr
+            && character >= CharactersClient
+            && character < CharactersClient + MAX_CHARACTERS_CLIENT;
+    }
+
+    void CopyCharacterId(wchar_t* destination, const wchar_t* source)
+    {
+        if (destination == nullptr)
+        {
+            return;
+        }
+
+        wcsncpy_s(destination, MAX_USERNAME_SIZE + 1, source != nullptr ? source : L"", _TRUNCATE);
+    }
 }
 
 void Setting_Monster(CHARACTER* c, EMonsterType Type, int PositionX, int PositionY)
 {
     OBJECT* o;
+
+    if (!IsValidClientCharacter(c))
+    {
+        return;
+    }
 
     int nCastle = BLOODCASTLE_NUM + (gMapManager.WorldActive - WD_11BLOODCASTLE_END);
     if (nCastle > 0 && nCastle <= BLOODCASTLE_NUM)
@@ -13072,7 +13312,7 @@ void Setting_Monster(CHARACTER* c, EMonsterType Type, int PositionX, int Positio
         {
             if (Type == MonsterScript[i].Type)
             {
-                wcscpy_s(c->ID, MAX_MONSTER_NAME + 1, MonsterScript[i].Name);
+                CopyCharacterId(c->ID, MonsterScript[i].Name);
                 break;
             }
         }
@@ -14936,6 +15176,7 @@ CHARACTER* CreateMonster(EMonsterType Type, int PositionX, int PositionY, int Ke
     }
 
     Setting_Monster(c, Type, PositionX, PositionY);
+    SetLorenciaJewelSellerName(c);
 
     return c;
 }
@@ -15300,7 +15541,7 @@ bool RenderCharacterBackItem(CHARACTER* c, OBJECT* o, bool bTranslate)
         if (gMapManager.InChaosCastle() == false)
         {
             PART_t* w = &c->Wing;
-            if (w->Type != -1)
+            if (w->Type != -1 && !GameConfig::GetInstance().GetHideWings())
             {
                 w->LinkBone = 47;
                 if (o->CurrentAction == PLAYER_FLY || o->CurrentAction == PLAYER_FLY_CROSSBOW)

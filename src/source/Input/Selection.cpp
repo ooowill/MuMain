@@ -56,15 +56,19 @@ namespace Input::Selection
 {
 namespace
 {
-    bool IsSmallGroundPickupModel(const OBJECT* o)
+    bool IsKundunBoxPickup(const OBJECT* o, const ITEM* item)
     {
-        return o != nullptr && o->Type == MODEL_EVENT + 10;
+        return o != nullptr
+            && item != nullptr
+            && item->Type == ITEM_BOX_OF_LUCK
+            && item->Level >= 8
+            && item->Level <= 12;
     }
 
-    OBB_t BuildGroundPickupOBB(const OBJECT* o)
+    OBB_t BuildGroundPickupOBB(const OBJECT* o, const ITEM* item)
     {
         OBB_t pickOBB = o->OBB;
-        if (!IsSmallGroundPickupModel(o))
+        if (!IsKundunBoxPickup(o, item))
         {
             return pickOBB;
         }
@@ -88,15 +92,32 @@ namespace
         return pickOBB;
     }
 
-    bool IsMouseOverGroundPickup(const OBJECT* o)
+    bool IsMouseWithinKundunBoxScreenArea(const OBJECT* o, const ITEM* item)
+    {
+        if (!IsKundunBoxPickup(o, item))
+        {
+            return false;
+        }
+
+        constexpr int halfWidth = 22;
+        constexpr int topOffset = 26;
+        constexpr int bottomOffset = 18;
+        return MouseX >= o->ScreenX - halfWidth
+            && MouseX <= o->ScreenX + halfWidth
+            && MouseY >= o->ScreenY - topOffset
+            && MouseY <= o->ScreenY + bottomOffset;
+    }
+
+    bool IsMouseOverGroundPickup(const OBJECT* o, const ITEM* item)
     {
         if (CollisionDetectLineToOBB(MousePosition, MouseTarget, o->OBB))
         {
             return true;
         }
 
-        return IsSmallGroundPickupModel(o)
-            && CollisionDetectLineToOBB(MousePosition, MouseTarget, BuildGroundPickupOBB(o));
+        return (IsKundunBoxPickup(o, item)
+                && CollisionDetectLineToOBB(MousePosition, MouseTarget, BuildGroundPickupOBB(o, item)))
+            || IsMouseWithinKundunBoxScreenArea(o, item);
     }
 }
 
@@ -118,7 +139,7 @@ int SelectItem()
         OBJECT* o = &Items[i].Object;
         if (o->Live && o->Visible)
         {
-            if (IsMouseOverGroundPickup(o))
+            if (IsMouseOverGroundPickup(o, &Items[i].Item))
             {
                 {
                     o->LightEnable = false;

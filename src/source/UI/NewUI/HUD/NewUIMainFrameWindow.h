@@ -121,8 +121,11 @@ namespace SEASON3B
         void SetHeroPriorSkill(BYTE bySkill);
 
         void Reset();
+        void LoadLocalHotKeys();
+        void SaveLocalHotKeys() const;
 
         void SetHotKey(int iHotKey, int iSkillType);
+        void SetHotKeyFromServer(int iHotKey, int iSkillType);
         int GetHotKey(int iHotKey);
         int GetSkillIndex(int iSkillType);
         void RenderCurrentSkillAndHotSkillList();
@@ -137,6 +140,7 @@ namespace SEASON3B
         bool IsArrayUp(BYTE bySkill);
         bool IsArrayIn(BYTE bySkill);
         void UseHotKey(int iHotKey);
+        void SetHotKeyInternal(int iHotKey, int iSkillType, bool saveLocal);
 
         void RenderSkillIcon(int iIndex, float x, float y, float width, float height);
         void RenderSkillDelay(int iIndex, float x, float y, float width, float height);
@@ -212,6 +216,7 @@ namespace SEASON3B
         void UpdateItemHotKey();
 
         void ResetSkillHotKey();
+        void LoadSkillHotKeysLocal();
         void SetSkillHotKey(int iHotKey, int iSkillType);
         int GetSkillHotKey(int iHotKey);
         int GetSkillHotKeyIndex(int iSkillType);

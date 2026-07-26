@@ -40,6 +40,7 @@
 #include "GameLogic/Events/Cinematic/CDirection.h"
 #include "World/MapInfra/MapManager.h"
 #include "GameLogic/Events/Event.h"
+#include "Character/AccountCompanionClient.h"
 
 #include "UI/NewUI/NewUISystem.h"
 #include "GameLogic/Events/w_CursedTemple.h"
@@ -55,6 +56,7 @@
 #include "GameLogic/Social/MonkSystem.h"
 #include "Character/CharacterManager.h"
 #include "MUHelper/MuHelper.h"
+#include "Network/Server/ServerListManager.h"
 
 
 #include "Camera/CameraProjection.h"
@@ -74,6 +76,7 @@ extern int DirTable[16];
 
 extern BOOL g_bUseWindowMode;
 extern void SetPlayerBow(CHARACTER* c);
+void RenderAccountGuardHP();
 
 #ifdef _PVP_ADD_MOVE_SCROLL
 extern CMurdererMove g_MurdererMove;
@@ -222,6 +225,156 @@ void PrintPKLog(CHARACTER* pCha)
     }
 }
 #endif // PK_ATTACK_TESTSERVER_LOG
+
+bool IsSelectedPvpServerForAutoAttack()
+{
+    return g_ServerListManager != nullptr && g_ServerListManager->IsSelectedPvpServer();
+}
+
+static bool IsSelectedWarServerForGuildWar()
+{
+    return g_ServerListManager != nullptr && g_ServerListManager->IsSelectedWarServer();
+}
+
+static bool IsGuildWarEnabledForSelectedServer()
+{
+    return EnableGuildWar && IsSelectedWarServerForGuildWar();
+}
+
+int FindCharacterClientIndex(const CHARACTER* character)
+{
+    if (character == nullptr)
+    {
+        return -1;
+    }
+
+    for (int i = 0; i < MAX_CHARACTERS_CLIENT; ++i)
+    {
+        if (&CharactersClient[i] == character)
+        {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+int FindLivePlayerIndexByName(const wchar_t* name)
+{
+    if (name == nullptr || name[0] == L'\0')
+    {
+        return -1;
+    }
+
+    for (int i = 0; i < MAX_CHARACTERS_CLIENT; ++i)
+    {
+        CHARACTER* character = &CharactersClient[i];
+        if (character->Object.Live
+            && character->Object.Kind == KIND_PLAYER
+            && character->ID[0] != L'\0'
+            && wcscmp(character->ID, name) == 0)
+        {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+bool IsSameGuildAsHero(const CHARACTER* character)
+{
+    if (Hero == nullptr
+        || character == nullptr
+        || Hero->GuildMarkIndex < 0
+        || character->GuildMarkIndex < 0)
+    {
+        return false;
+    }
+
+    return wcscmp(GuildMark[Hero->GuildMarkIndex].GuildName, GuildMark[character->GuildMarkIndex].GuildName) == 0;
+}
+
+bool IsPartyMemberClientIndex(int clientIndex)
+{
+    return g_pPartyManager != nullptr
+        && clientIndex >= 0
+        && clientIndex < MAX_CHARACTERS_CLIENT
+        && g_pPartyManager->IsPartyMember(clientIndex);
+}
+
+bool IsOwnSummonedAccountCompanion(const CHARACTER* character)
+{
+    if (character == nullptr || character->ID[0] == L'\0')
+    {
+        return false;
+    }
+
+    for (int slot = 0; slot < AccountCharacterList::MaxCharacters; ++slot)
+    {
+        const AccountCharacterList::Entry* entry = AccountCharacterList::GetBySlot(slot);
+        if (entry != nullptr
+            && AccountCompanionClient::IsSummoned(slot)
+            && wcscmp(entry->Name, character->ID) == 0)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool IsProtectedSentinelTarget(const CHARACTER* character)
+{
+    if (character == nullptr)
+    {
+        return false;
+    }
+
+    if (IsOwnSummonedAccountCompanion(character))
+    {
+        return true;
+    }
+
+    if (character->OwnerID[0] == L'\0')
+    {
+        return false;
+    }
+
+    if (Hero != nullptr && wcscmp(character->OwnerID, Hero->ID) == 0)
+    {
+        return true;
+    }
+
+    const int ownerIndex = FindLivePlayerIndexByName(character->OwnerID);
+    if (ownerIndex < 0)
+    {
+        return false;
+    }
+
+    return IsPartyMemberClientIndex(ownerIndex) || IsSameGuildAsHero(&CharactersClient[ownerIndex]);
+}
+
+bool IsPvpServerAutoAttackTarget(CHARACTER* character, int selected)
+{
+    if (!IsSelectedPvpServerForAutoAttack()
+        || Hero == nullptr
+        || character == nullptr
+        || character == Hero
+        || character->Dead > 0
+        || character->Object.Kind != KIND_PLAYER)
+    {
+        return false;
+    }
+
+    if (IsPartyMemberClientIndex(selected)
+        || IsSameGuildAsHero(character)
+        || IsProtectedSentinelTarget(character))
+    {
+        return false;
+    }
+
+    return true;
+}
 
 bool PressKey(int Key)
 {
@@ -542,6 +695,11 @@ bool CheckAttack_Fenrir(CHARACTER* c)
         return false;
     }
 
+    if (IsSelectedPvpServerForAutoAttack() && c->Object.Kind == KIND_PLAYER && c != Hero)
+    {
+        return IsPvpServerAutoAttackTarget(c, FindCharacterClientIndex(c));
+    }
+
     if (gMapManager.InChaosCastle() == true && c != Hero)
     {
         return true;
@@ -557,13 +715,14 @@ bool CheckAttack_Fenrir(CHARACTER* c)
             return true;
         }
     }
+
     if (c->Object.Kind == KIND_MONSTER)
     {
-        if (EnableGuildWar && EnableSoccer)
+        if (IsGuildWarEnabledForSelectedServer() && EnableSoccer)
         {
             return true;
         }
-        else if (EnableGuildWar)
+        else if (IsGuildWarEnabledForSelectedServer())
         {
             return false;
         }
@@ -647,7 +806,7 @@ bool CheckAttack_Fenrir(CHARACTER* c)
             return true;
         }
 
-        if (EnableGuildWar && c->PK >= PVP_MURDERER2 && c->GuildMarkIndex != -1
+        if (IsGuildWarEnabledForSelectedServer() && c->PK >= PVP_MURDERER2 && c->GuildMarkIndex != -1
             && wcscmp(GuildMark[Hero->GuildMarkIndex].GuildName, GuildMark[c->GuildMarkIndex].GuildName) == 0)
         {
             return  false;
@@ -664,7 +823,7 @@ bool CheckAttack_Fenrir(CHARACTER* c)
                 return false;
             }
         }
-        else if (EnableGuildWar)
+        else if (IsGuildWarEnabledForSelectedServer())
         {
             if (c->GuildTeam == 2 && c != Hero)
             {
@@ -677,7 +836,7 @@ bool CheckAttack_Fenrir(CHARACTER* c)
         }
         else if (c->PK >= PVP_MURDERER2 || (Core::Input::IsKeyDown(VK_CONTROL) && c != Hero))
         {
-            return true;
+            return false;
         }
         else if (gMapManager.IsCursedTemple() && !g_CursedTemple->IsPartyMember(SelectedCharacter))
         {
@@ -720,6 +879,11 @@ bool CheckAttack()
         return false;
     }
 
+    if (IsSelectedPvpServerForAutoAttack() && c->Object.Kind == KIND_PLAYER && c != Hero)
+    {
+        return IsPvpServerAutoAttackTarget(c, SelectedCharacter);
+    }
+
     if (gMapManager.InChaosCastle() == true && c != Hero)
     {
         return true;
@@ -737,7 +901,7 @@ bool CheckAttack()
 
         if (Core::Input::IsKeyDown(VK_CONTROL))
         {
-            if (EnableGuildWar)
+            if (IsGuildWarEnabledForSelectedServer())
             {
                 if (c->GuildTeam == 2 && c != Hero)
                     return true;
@@ -753,7 +917,7 @@ bool CheckAttack()
             {
                 return false;
             }
-            if (EnableGuildWar)
+            if (IsGuildWarEnabledForSelectedServer())
             {
                 if (c->GuildTeam == 2 && c != Hero)
                     return true;
@@ -769,7 +933,7 @@ bool CheckAttack()
         {
             return false;
         }
-        else if (EnableGuildWar)
+        else if (IsGuildWarEnabledForSelectedServer())
         {
             if (c->GuildTeam == 2 && c != Hero)
                 return true;
@@ -793,11 +957,11 @@ bool CheckAttack()
 
     if (c->Object.Kind == KIND_MONSTER)
     {
-        if (EnableGuildWar && EnableSoccer)
+        if (IsGuildWarEnabledForSelectedServer() && EnableSoccer)
         {
             return true;
         }
-        else if (EnableGuildWar)
+        else if (IsGuildWarEnabledForSelectedServer())
         {
             return false;
         }
@@ -883,7 +1047,7 @@ bool CheckAttack()
             return true;
         }
 
-        if (EnableGuildWar && c->PK >= PVP_MURDERER2 && c->GuildMarkIndex != -1
+        if (IsGuildWarEnabledForSelectedServer() && c->PK >= PVP_MURDERER2 && c->GuildMarkIndex != -1
             && wcscmp(GuildMark[Hero->GuildMarkIndex].GuildName, GuildMark[c->GuildMarkIndex].GuildName) == 0)
         {
             return  false;
@@ -903,7 +1067,7 @@ bool CheckAttack()
         {
             return false;
         }
-        else if (EnableGuildWar)
+        else if (IsGuildWarEnabledForSelectedServer())
         {
             if (c->GuildTeam == 2 && c != Hero)
             {
@@ -916,7 +1080,7 @@ bool CheckAttack()
         }
         else if (c->PK >= PVP_MURDERER2 || (Core::Input::IsKeyDown(VK_CONTROL) && c != Hero))
         {
-            return true;
+            return false;
         }
         else if (gMapManager.IsCursedTemple() && !g_CursedTemple->IsPartyMember(SelectedCharacter))
         {
@@ -959,7 +1123,12 @@ int	getTargetCharacterKey(CHARACTER* c, int selected)
         return sc->Key;
     }
 
-    if (EnableGuildWar && sc->PK >= PVP_MURDERER2 && sc->GuildMarkIndex != -1 && wcscmp(GuildMark[Hero->GuildMarkIndex].GuildName, GuildMark[sc->GuildMarkIndex].GuildName) == 0)
+    if (IsSelectedPvpServerForAutoAttack() && sc->Object.Kind == KIND_PLAYER && sc != Hero)
+    {
+        return IsPvpServerAutoAttackTarget(sc, selected) ? sc->Key : -1;
+    }
+
+    if (IsGuildWarEnabledForSelectedServer() && sc->PK >= PVP_MURDERER2 && sc->GuildMarkIndex != -1 && wcscmp(GuildMark[Hero->GuildMarkIndex].GuildName, GuildMark[sc->GuildMarkIndex].GuildName) == 0)
     {
         return  -1;
     }
@@ -979,7 +1148,7 @@ int	getTargetCharacterKey(CHARACTER* c, int selected)
         return sc->Key;
     }
 
-    if (EnableGuildWar)
+    if (IsGuildWarEnabledForSelectedServer())
     {
         if (sc->GuildTeam == 2 && sc != Hero)
         {
@@ -1010,7 +1179,7 @@ int	getTargetCharacterKey(CHARACTER* c, int selected)
 
     if ((sc->PK >= PVP_MURDERER2 && sc->Object.Kind == KIND_PLAYER) || (Core::Input::IsKeyDown(VK_CONTROL) && sc != Hero))
     {
-        return sc->Key;
+        return -1;
     }
 
     if (gMapManager.IsCursedTemple())
@@ -3160,7 +3329,7 @@ void MoveHero()
             MouseUpdateTime = 0;
             Success = false;
 
-            if (!c->SafeZone)
+            if (!c->SafeZone || IsSelectedPvpServerForAutoAttack())
             {
                 Success = CheckAttack();
             }
@@ -3534,9 +3703,9 @@ bool CheckSkillUseCondition(OBJECT* o, int Type)
     return true;
 }
 
-extern wchar_t TextList[50][100];
-extern int  TextListColor[50];
-extern int  TextBold[50];
+extern wchar_t TextList[64][100];
+extern int  TextListColor[64];
+extern int  TextBold[64];
 
 void GetTime(DWORD time, std::wstring& timeText, bool isSecond)
 {
@@ -3662,6 +3831,7 @@ void RenderInterface(bool Render)
 
     RenderOutSides();
     RenderPartyHP();
+    RenderAccountGuardHP();
 
     RenderSwichState();
     battleCastle::RenderBuildTimes();
@@ -3988,6 +4158,67 @@ void RenderPartyHP()
     glColor3f(1.f, 1.f, 1.f);
 }
 
+void RenderAccountGuardHP()
+{
+    if (CharactersClient == nullptr)
+        return;
+
+    AccountCompanionClient::MiniPartyEntry entries[AccountCharacterList::MaxCharacters]{};
+    const int entryCount = AccountCompanionClient::CopyMiniPartyEntries(entries, AccountCharacterList::MaxCharacters);
+    if (entryCount <= 0)
+        return;
+
+    constexpr float Width = 38.f;
+    wchar_t Text[100];
+
+    for (int j = 0; j < entryCount; ++j)
+    {
+        const AccountCompanionClient::MiniPartyEntry& entry = entries[j];
+
+        if (!entry.Visible || entry.ClientIndex < 0 || entry.ClientIndex >= MAX_CHARACTERS_CLIENT)
+            continue;
+
+        CHARACTER* c = &CharactersClient[entry.ClientIndex];
+        OBJECT* o = &c->Object;
+        vec3_t Position;
+        int ScreenX, ScreenY;
+
+        Vector(o->Position[0], o->Position[1], o->Position[2] + o->BoundingBoxMax[2] + 100.f, Position);
+        CameraProjection::WorldToScreen(g_Camera, Position, &ScreenX, &ScreenY);
+        ScreenX -= static_cast<int>(Width / 2.f);
+
+        if ((MouseX >= ScreenX && MouseX < ScreenX + Width && MouseY >= ScreenY - 2 && MouseY < ScreenY + 6))
+        {
+            mu_swprintf(Text, L"HP : %d0%%", entry.StepHP);
+            g_pRenderText->SetTextColor(255, 230, 210, 255);
+            g_pRenderText->RenderText(ScreenX, ScreenY - 6, Text);
+        }
+
+        EnableAlphaTest();
+        glColor4f(0.f, 0.f, 0.f, 0.5f);
+        RenderColor(static_cast<float>(ScreenX + 1), static_cast<float>(ScreenY + 1), Width + 4.f, 5.f);
+
+        EnableAlphaBlend();
+        glColor3f(0.2f, 0.0f, 0.0f);
+        RenderColor(static_cast<float>(ScreenX), static_cast<float>(ScreenY), Width + 4.f, 5.f);
+
+        glColor3f(50.f / 255.f, 10.f / 255.f, 0.f);
+        RenderColor(static_cast<float>(ScreenX + 2), static_cast<float>(ScreenY + 2), Width, 1.f);
+
+        const int stepHP = std::min<int>(10, entry.StepHP);
+
+        glColor3f(250.f / 255.f, 10.f / 255.f, 0.f);
+        for (int k = 0; k < stepHP; ++k)
+        {
+            RenderColor(static_cast<float>(ScreenX + 2 + (k * 4)), static_cast<float>(ScreenY + 2), 3.f, 2.f);
+        }
+        DisableAlphaBlend();
+    }
+
+    DisableAlphaBlend();
+    glColor3f(1.f, 1.f, 1.f);
+}
+
 
 void RenderTimes()
 {
@@ -4057,7 +4288,7 @@ void RenderCursor()
         else
             RenderBitmap(BITMAP_CURSOR + 7, (float)MouseX - 2.f, (float)MouseY - 2.f, 24.f, 24.f);
     }
-    else if ((!Hero->SafeZone/*||EnableEdit*/) && SelectedCharacter != -1)
+    else if ((!Hero->SafeZone || IsSelectedPvpServerForAutoAttack()/*||EnableEdit*/) && SelectedCharacter != -1)
     {
         if (CheckAttack() && !MouseOnWindow)
         {

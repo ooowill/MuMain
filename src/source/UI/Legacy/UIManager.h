@@ -15,6 +15,9 @@ extern ItemAddOptioninfo* g_pItemAddOptioninfo;
 class CUIManager;
 extern CUIManager* g_pUIManager;
 
+bool LaunchPersonalStoreBrowserOverlayForCurrentAccount();
+bool LaunchPersonalStoreBrowserOverlayForSeller(const wchar_t* sellerName);
+
 enum
 {
     INTERFACE_NONE = 0,

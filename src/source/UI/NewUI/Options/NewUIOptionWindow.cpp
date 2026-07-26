@@ -6,6 +6,7 @@
 #include "UI/NewUI/Options/NewUIOptionWindow.h"
 #include "UI/NewUI/NewUISystem.h"
 #include "Render/Textures/ZzzTexture.h"
+#include "Render/Effects/ZzzEffect.h"
 #include "Audio/DSPlaySound.h"
 #include "Data/GameConfig/GameConfig.h"
 #include "Audio/AudioPlayer.h"
@@ -44,24 +45,20 @@ static const struct { int width; int height; const wchar_t* label; } s_Resolutio
 };
 static const int s_NumResolutions = sizeof(s_Resolutions) / sizeof(s_Resolutions[0]);
 
-// I18N locale codes (ASCII) paired with the language's display name in that
-// language. The set mirrors what ResxGen emits and what I18N::GetAvailableLocales()
-// returns at runtime; held here as wide strings so the CNewUIComboBox can show
-// them without per-frame UTF-8 -> wide conversions.
+// I18N locale codes paired with the launcher language pack. Labels are kept as
+// ASCII Portuguese names so they render safely through the legacy combo box.
 static const struct { const char* code; const wchar_t* label; } s_Languages[] = {
-    { "en",    L"English" },
-    // Non-ASCII characters use universal-character-name escapes so MSVC reads
-    // the wide-string literals correctly regardless of source charset.
-    { "de",    L"Deutsch" },
-    { "es",    L"Espa\u00f1ol" },                                                  // Español
-    { "id",    L"Bahasa Indonesia" },
-    { "ja",    L"\u65E5\u672C\u8A9E" },                                       // 日本語
-    { "pl",    L"Polski" },
-    { "pt",    L"Portugu\u00eas" },                                                // Português
-    { "ru",    L"\u0420\u0443\u0441\u0441\u043a\u0438\u0439" },                   // Русский
-    { "tl",    L"Tagalog" },
-    { "uk",    L"\u0423\u043a\u0440\u0430\u0457\u043d\u0441\u044c\u043a\u0430" }, // Українська
-    { "zh-TW", L"\u7e41\u9ad4\u4e2d\u6587" },                                      // 繁體中文
+    { "ko", L"\uD55C\uAD6D\uC5B4" },
+    { "es", L"Espa\u00F1ol" },
+    { "pl", L"Polski" },
+    { "ja", L"\u65E5\u672C\u8A9E" },
+    { "uk", L"\u0423\u043A\u0440\u0430\u0457\u043D\u0441\u044C\u043A\u0430" },
+    { "he", L"\u05E2\u05D1\u05E8\u05D9\u05EA" },
+    { "de", L"Deutsch" },
+    { "en", L"English" },
+    { "pt", L"Portugu\u00EAs" },
+    { "it", L"Italiano" },
+    { "fr", L"Fran\u00E7ais" },
 };
 static const int s_NumLanguages = sizeof(s_Languages) / sizeof(s_Languages[0]);
 
@@ -91,6 +88,15 @@ static const wchar_t* const* GetLanguageLabels()
         initialized = true;
     }
     return labels;
+}
+
+static std::wstring GetLegacyLanguageForLocale(const char* code)
+{
+    if (std::strcmp(code, "pt") == 0)
+        return L"Por";
+    if (std::strcmp(code, "es") == 0)
+        return L"Spn";
+    return L"Eng";
 }
 
 namespace
@@ -147,8 +153,8 @@ SEASON3B::CNewUIOptionWindow::CNewUIOptionWindow()
     m_bSlideHelp = true;
     m_iVolumeLevel = GameConfig::GetInstance().GetSoundVolume();
     m_iMusicLevel = GameConfig::GetInstance().GetMusicVolume();
-    m_iRenderLevel = 4;
-    m_bRenderAllEffects = true;
+    m_iRenderLevel = GameConfig::GetInstance().GetReduceCharacterGlow() ? 0 : 4;
+    m_bRenderAllEffects = !GameConfig::GetInstance().GetDisableHeavyEffects();
     m_iResolutionIndex = FindCurrentResolutionIndex();
     m_bWindowedMode = (g_bUseWindowMode == TRUE);
     m_iLanguageIndex = FindCurrentLanguageIndex();
@@ -461,7 +467,16 @@ void SEASON3B::CNewUIOptionWindow::HandleCheckboxInputs()
     for (const auto& cb : boxes)
     {
         if (CheckMouseIn(m_Pos.x + CHECKBOX_X_LOCAL, m_Pos.y + cb.yLocal, CHECKBOX_SIZE, CHECKBOX_SIZE))
-            *cb.target = !*cb.target;
+        {
+            if (cb.target == &m_bRenderAllEffects)
+            {
+                SetRenderAllEffects(!m_bRenderAllEffects);
+            }
+            else
+            {
+                *cb.target = !*cb.target;
+            }
+        }
     }
 }
 
@@ -851,6 +866,11 @@ int SEASON3B::CNewUIOptionWindow::GetRenderLevel()
 void SEASON3B::CNewUIOptionWindow::SetRenderAllEffects(bool bRenderAllEffects)
 {
     m_bRenderAllEffects = bRenderAllEffects;
+
+    if (!m_bRenderAllEffects)
+    {
+        ClearPerformanceEffects();
+    }
 }
 
 bool SEASON3B::CNewUIOptionWindow::GetRenderAllEffects()
@@ -889,6 +909,7 @@ void SEASON3B::CNewUIOptionWindow::ApplyLanguage()
     // GameConfig string-IO. Locale codes are ASCII so the conversion is safe.
     std::wstring wide(code, code + std::strlen(code));
     GameConfig::GetInstance().SetUILocale(wide);
+    GameConfig::GetInstance().SetLanguageSelection(GetLegacyLanguageForLocale(code));
     GameConfig::GetInstance().Save();
 }
 

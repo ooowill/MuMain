@@ -14,6 +14,7 @@
 #include "Audio/DSPlaySound.h"
 #include "Network/Server/WSclient.h"
 #include "GameLogic/Pets/CSPetSystem.h"
+#include "UI/NewUI/NewUISystem.h"
 
 extern float g_fBoneSave[10][3][4];
 
@@ -29,6 +30,11 @@ void CreateJointFpsChecked(int Type, vec3_t Position, vec3_t TargetPosition, vec
 void CreateJoint(int Type, vec3_t Position, vec3_t TargetPosition, vec3_t Angle, int SubType, OBJECT* Target, float Scale, short PKKey,
     WORD SkillIndex, WORD SkillSerialNum, int iChaIndex, const float* vPriorColor, short int sTargetindex)
 {
+    if (g_pOption != nullptr && !g_pOption->GetRenderAllEffects())
+    {
+        return;
+    }
+
     for (int i = 0; i < MAX_JOINTS; i++)
     {
         JOINT* o = &Joints[i];
@@ -1494,7 +1500,14 @@ void CreateJoint(int Type, vec3_t Position, vec3_t TargetPosition, vec3_t Angle,
                 VectorCopy(o->Position, o->TargetPosition);
                 break;
             case MODEL_SPEARSKILL:
-                VectorCopy(o->Target->Position, o->TargetPosition);
+                if (o->Target != NULL)
+                {
+                    VectorCopy(o->Target->Position, o->TargetPosition);
+                }
+                else
+                {
+                    VectorCopy(TargetPosition, o->TargetPosition);
+                }
                 switch (o->SubType)
                 {
                 case 0:
@@ -2929,6 +2942,31 @@ else Angle[2] = TurnAngle2(Angle[2],0.f,FarAngle(Angle[2],0.f)*0.5f);
 
 void MoveJoint(JOINT* o, int iIndex)
 {
+    if (o == NULL || !o->Live)
+    {
+        return;
+    }
+
+    if (o->Type == MODEL_SPEARSKILL)
+    {
+        const bool isStandaloneSpearSkill =
+            o->SubType == 5 || o->SubType == 6 || o->SubType == 7 || o->SubType == 8;
+
+        if (!isStandaloneSpearSkill && (o->Target == NULL || !o->Target->Live))
+        {
+            o->LifeTime = 0;
+            o->Live = false;
+            return;
+        }
+
+        if ((o->SubType == 15 || o->SubType == 17) && o->Target->Owner == NULL)
+        {
+            o->LifeTime = 0;
+            o->Live = false;
+            return;
+        }
+    }
+
     float Height;
     vec3_t Light;
     float Luminosity;
@@ -4256,7 +4294,7 @@ void MoveJoint(JOINT* o, int iIndex)
         }
         else if (o->SubType == 3)
         {
-            if (!o->Target->Live)
+            if (!o->Target || !o->Target->Live)
             {
                 o->LifeTime = 0;
                 o->Live = false;
@@ -4352,7 +4390,7 @@ void MoveJoint(JOINT* o, int iIndex)
         }
         else
         {
-            if (!o->Target->Live)
+            if (!o->Target || !o->Target->Live)
             {
                 o->LifeTime = 0;
                 o->Live = false;
@@ -6905,6 +6943,18 @@ void MoveJoint(JOINT* o, int iIndex)
 
 void MoveJoints()
 {
+    if (g_pOption != nullptr && !g_pOption->GetRenderAllEffects())
+    {
+        for (int i = 0; i < MAX_JOINTS; ++i)
+        {
+            Joints[i].Live = false;
+            Joints[i].Target = NULL;
+            Joints[i].NumTails = 0;
+        }
+
+        return;
+    }
+
     for (int i = 0; i < MAX_JOINTS; i++)
     {
         JOINT* o = &Joints[i];
@@ -6917,6 +6967,11 @@ void MoveJoints()
 
 void RenderJoints(BYTE bRenderOneMore)
 {
+    if (g_pOption != nullptr && !g_pOption->GetRenderAllEffects())
+    {
+        return;
+    }
+
     for (int i = 0; i < MAX_JOINTS; i++)
     {
         JOINT* o = &Joints[i];

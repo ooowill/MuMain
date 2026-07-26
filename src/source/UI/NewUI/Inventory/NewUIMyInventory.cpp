@@ -2,6 +2,8 @@
 //////////////////////////////////////////////////////////////////////
 
 #include "stdafx.h"
+#include <algorithm>
+#include <cwchar>
 #include "UI/NewUI/Inventory/NewUIMyInventory.h"
 #include "UI/NewUI/NewUISystem.h"
 #include "I18N/All.h"
@@ -15,6 +17,7 @@ extern bool SelectFlag;
 #include "GameLogic/Pets/GIPetManager.h"
 #include "GameLogic/Pets/w_PetProcess.h"
 #include "Character/CSParts.h"
+#include "Character/ItemEvolutionClient.h"
 #include "UI/Legacy/UIJewelHarmony.h"
 #include "GameLogic/Events/Cinematic/CDirection.h"
 #include "Engine/Object/ZzzInventory.h"
@@ -36,6 +39,161 @@ extern bool SelectFlag;
 #include "Engine/Object/ZzzInterface.h"
 
 using namespace SEASON3B;
+
+namespace
+{
+    constexpr float kInventoryPowerDigitAtlasCellWidth = 96.f / 1024.f;
+    constexpr float kInventoryPowerDigitAtlasHeight = 140.f / 256.f;
+    constexpr float kInventoryPowerDigitGap = -0.1f;
+    constexpr float kInventoryPowerDigitWidth = 4.7f;
+    constexpr float kInventoryPowerDigitHeight = 9.f;
+    constexpr unsigned long long kInventoryPowerScoreMax = 9999999999ULL;
+
+    int CountBits(BYTE value)
+    {
+        int count = 0;
+        while (value != 0)
+        {
+            count += (value & 1);
+            value >>= 1;
+        }
+
+        return count;
+    }
+
+    unsigned long long CalculateEquippedItemPowerScore(const ITEM& item)
+    {
+        if (item.Type < 0)
+        {
+            return 0;
+        }
+
+        unsigned long long score = 120ULL;
+        score += static_cast<unsigned long long>(item.Level) * 75ULL;
+        score += static_cast<unsigned long long>(item.RequireLevel) * 6ULL;
+        score += static_cast<unsigned long long>(item.RequireStrength + item.RequireDexterity + item.RequireEnergy + item.RequireVitality + item.RequireCharisma) / 2ULL;
+        score += static_cast<unsigned long long>(item.DamageMin + item.DamageMax) * 3ULL;
+        score += static_cast<unsigned long long>(item.Defense + item.MagicDefense) * 4ULL;
+        score += static_cast<unsigned long long>(item.SuccessfulBlocking + item.MagicPower + item.WeaponSpeed) * 3ULL;
+        score += static_cast<unsigned long long>(CountBits(item.ExcellentFlags)) * 220ULL;
+
+        if (item.AncientDiscriminator != 0)
+        {
+            score += 500ULL;
+        }
+
+        if (item.Jewel_Of_Harmony_Option != 0)
+        {
+            score += 180ULL + static_cast<unsigned long long>(item.Jewel_Of_Harmony_OptionLevel) * 60ULL;
+        }
+
+        if (item.option_380)
+        {
+            score += 250ULL;
+        }
+
+        for (int socketIndex = 0; socketIndex < item.SocketCount && socketIndex < MAX_SOCKETS; ++socketIndex)
+        {
+            if (item.SocketSeedID[socketIndex] != SOCKET_EMPTY)
+            {
+                score += 160ULL + static_cast<unsigned long long>(item.SocketSphereLv[socketIndex]) * 35ULL;
+            }
+        }
+
+        if (item.SocketSeedSetOption != 0)
+        {
+            score += 260ULL;
+        }
+
+        return score;
+    }
+
+    unsigned long long CalculateCharacterPowerScore()
+    {
+        if (CharacterAttribute == nullptr || CharacterMachine == nullptr)
+        {
+            return 0;
+        }
+
+        const unsigned long long statTotal =
+            static_cast<unsigned long long>(CharacterAttribute->Strength + CharacterAttribute->AddStrength) +
+            static_cast<unsigned long long>(CharacterAttribute->Dexterity + CharacterAttribute->AddDexterity) +
+            static_cast<unsigned long long>(CharacterAttribute->Vitality + CharacterAttribute->AddVitality) +
+            static_cast<unsigned long long>(CharacterAttribute->Energy + CharacterAttribute->AddEnergy) +
+            static_cast<unsigned long long>(CharacterAttribute->Charisma + CharacterAttribute->AddCharisma);
+
+        unsigned long long score = static_cast<unsigned long long>(CharacterAttribute->Level) * 100ULL;
+        score += statTotal * 2ULL;
+        score += static_cast<unsigned long long>(CharacterAttribute->LifeMax + CharacterAttribute->ManaMax + CharacterAttribute->ShieldMax) / 20ULL;
+        score += static_cast<unsigned long long>(
+            CharacterAttribute->AttackDamageMinRight +
+            CharacterAttribute->AttackDamageMaxRight +
+            CharacterAttribute->AttackDamageMinLeft +
+            CharacterAttribute->AttackDamageMaxLeft +
+            CharacterAttribute->MagicDamageMin +
+            CharacterAttribute->MagicDamageMax +
+            CharacterAttribute->CurseDamageMin +
+            CharacterAttribute->CurseDamageMax) * 3ULL;
+        score += static_cast<unsigned long long>(
+            CharacterAttribute->Defense +
+            CharacterAttribute->MagicDefense +
+            CharacterAttribute->SuccessfulBlocking +
+            CharacterAttribute->AttackRating +
+            CharacterAttribute->AttackRatingPK +
+            CharacterAttribute->SuccessfulBlockingPK) * 2ULL;
+        score += static_cast<unsigned long long>(CharacterAttribute->AttackSpeed + CharacterAttribute->MagicSpeed) * 2ULL;
+
+        for (int slot = 0; slot < MAX_EQUIPMENT_INDEX; ++slot)
+        {
+            score += CalculateEquippedItemPowerScore(CharacterMachine->Equipment[slot]);
+        }
+
+        return std::min(score, kInventoryPowerScoreMax);
+    }
+
+    void RenderInventoryPowerDigits(float rightX, float y, unsigned long long value)
+    {
+        wchar_t text[32] = {};
+        swprintf_s(text, L"%llu", std::min(value, kInventoryPowerScoreMax));
+
+        const size_t length = std::wcslen(text);
+        if (length == 0)
+        {
+            return;
+        }
+
+        const float totalWidth = (static_cast<float>(length) * kInventoryPowerDigitWidth) + (static_cast<float>(length - 1) * kInventoryPowerDigitGap);
+        float x = rightX - totalWidth;
+
+        EnableAlphaTest();
+        glEnable(GL_TEXTURE_2D);
+        glColor4f(1.f, 1.f, 1.f, 1.f);
+
+        for (size_t index = 0; index < length; ++index)
+        {
+            if (text[index] < L'0' || text[index] > L'9')
+            {
+                continue;
+            }
+
+            const int digit = static_cast<int>(text[index] - L'0');
+            const float u = static_cast<float>(digit) * kInventoryPowerDigitAtlasCellWidth;
+            RenderBitmap(
+                CNewUIMyInventory::IMAGE_INVENTORY_POWER_DIGITS,
+                x,
+                y,
+                kInventoryPowerDigitWidth,
+                kInventoryPowerDigitHeight,
+                u,
+                0.f,
+                kInventoryPowerDigitAtlasCellWidth,
+                kInventoryPowerDigitAtlasHeight);
+            x += kInventoryPowerDigitWidth + kInventoryPowerDigitGap;
+        }
+
+        glColor4f(1.f, 1.f, 1.f, 1.f);
+    }
+}
 
 CNewUIMyInventory::CNewUIMyInventory()
 {
@@ -145,6 +303,7 @@ bool CNewUIMyInventory::EquipItem(int iIndex, std::span<const BYTE> pbyItemPacke
 
     pTempItem->lineal_pos = iIndex;
     pTempItem->ex_src_type = ITEM_EX_SRC_EQUIPMENT;
+    ItemEvolutionClient::ApplySlotInfoToItem(iIndex, pTempItem);
     memcpy(pTargetItemSlot, pTempItem, sizeof(ITEM));
     g_pNewItemMng->DeleteItem(pTempItem);
 
@@ -605,19 +764,10 @@ bool CNewUIMyInventory::UpdateKeyEvent()
         }
     }
 
-    if (CanOpenMyShopInterface() == true && IsPress('S'))
+    if (IsPress('S'))
     {
-        if (m_bMyShopOpen)
+        if (LaunchPersonalStoreBrowserOverlayForCurrentAccount())
         {
-            if (m_MyShopMode == MYSHOP_MODE_OPEN)
-            {
-                ChangeMyShopButtonStateClose();
-            }
-            else if (m_MyShopMode == MYSHOP_MODE_CLOSE)
-            {
-                ChangeMyShopButtonStateOpen();
-            }
-            g_pNewUISystem->Toggle(INTERFACE_MYSHOP_INVENTORY);
             PlayBuffer(SOUND_CLICK01);
         }
         return false;
@@ -705,6 +855,7 @@ bool CNewUIMyInventory::Render()
     glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
     RenderFrame();
     RenderInventoryDetails();
+    RenderCharacterPowerScore();
     RenderSetOption();
     RenderSocketOption();
     RenderButtons();
@@ -1230,10 +1381,14 @@ void CNewUIMyInventory::LoadImages() const
     LoadBitmap(L"Interface\\newui_expansion_btn.tga", IMAGE_INVENTORY_EXPAND_BTN, GL_LINEAR);
     LoadBitmap(L"Interface\\newui_Bt_openshop.tga", IMAGE_INVENTORY_MYSHOP_OPEN_BTN, GL_LINEAR);
     LoadBitmap(L"Interface\\newui_Bt_closeshop.tga", IMAGE_INVENTORY_MYSHOP_CLOSE_BTN, GL_LINEAR);
+    LoadBitmap(L"Interface\\i_attack.tga", IMAGE_INVENTORY_POWER_ICON, GL_LINEAR, GL_CLAMP_TO_EDGE);
+    LoadBitmap(L"Interface\\Azoth\\azoth_digits.tga", IMAGE_INVENTORY_POWER_DIGITS, GL_LINEAR, GL_CLAMP_TO_EDGE);
 }
 
 void CNewUIMyInventory::UnloadImages()
 {
+    DeleteBitmap(IMAGE_INVENTORY_POWER_DIGITS);
+    DeleteBitmap(IMAGE_INVENTORY_POWER_ICON);
     DeleteBitmap(IMAGE_INVENTORY_MYSHOP_CLOSE_BTN);
     DeleteBitmap(IMAGE_INVENTORY_MYSHOP_OPEN_BTN);
     DeleteBitmap(IMAGE_INVENTORY_REPAIR_BTN);
@@ -1368,10 +1523,6 @@ void CNewUIMyInventory::RenderButtons()
         {
             m_BtnRepair.Render();
         }
-        if (m_bMyShopOpen == true)
-        {
-            m_BtnMyShop.Render();
-        }
     }
     m_BtnExit.Render();
     m_BtnExpand.Render();
@@ -1401,6 +1552,44 @@ void CNewUIMyInventory::RenderInventoryDetails() const
     g_pRenderText->SetFont(g_hFont);
 
     DisableAlphaBlend();
+}
+
+void CNewUIMyInventory::RenderCharacterPowerScore() const
+{
+    if (CharacterAttribute == nullptr || CharacterMachine == nullptr)
+    {
+        return;
+    }
+
+    const float x = static_cast<float>(m_Pos.x) + 12.f;
+    const float y = static_cast<float>(m_Pos.y) + 10.f;
+    const float width = 61.f;
+    const float height = 13.f;
+
+    glColor4f(0.f, 0.f, 0.f, 0.42f);
+    RenderColor(x + 1.f, y + height, width - 2.f, 1.f);
+    RenderColor(x + width, y + 2.f, 1.f, height - 3.f);
+    EndRenderColor();
+
+    glColor4f(0.88f, 0.68f, 0.27f, 0.58f);
+    RenderColor(x + 1.f, y, width - 2.f, 1.f);
+    RenderColor(x + 1.f, y + height - 1.f, width - 2.f, 1.f);
+    RenderColor(x, y + 1.f, 1.f, height - 2.f);
+    RenderColor(x + width - 1.f, y + 1.f, 1.f, height - 2.f);
+    EndRenderColor();
+
+    glColor4f(1.f, 0.9f, 0.48f, 0.34f);
+    RenderColor(x + 4.f, y + 2.f, width - 8.f, 1.f);
+    EndRenderColor();
+
+    glColor4f(1.f, 1.f, 1.f, 1.f);
+    RenderImage(IMAGE_INVENTORY_POWER_ICON, x + 4.f, y + 2.f, 9.f, 9.f);
+    RenderInventoryPowerDigits(x + width - 5.f, y + 2.f, CalculateCharacterPowerScore());
+
+    if (CheckMouseIn(x, y, width, height) == true)
+    {
+        RenderTipText(static_cast<int>(x), static_cast<int>(y + height + 3.f), L"Poder");
+    }
 }
 
 bool CNewUIMyInventory::EquipmentWindowProcess()
@@ -1617,22 +1806,6 @@ bool CNewUIMyInventory::BtnProcess()
             return true;
         }
 
-        if (m_bMyShopOpen == true && m_BtnMyShop.UpdateMouseEvent() == true)
-        {
-            if (m_MyShopMode == MYSHOP_MODE_OPEN)
-            {
-                ChangeMyShopButtonStateClose();
-                g_pNewUISystem->Show(INTERFACE_MYSHOP_INVENTORY);
-            }
-            else if (m_MyShopMode == MYSHOP_MODE_CLOSE)
-            {
-                ChangeMyShopButtonStateOpen();
-                g_pNewUISystem->Hide(INTERFACE_MYSHOP_INVENTORY);
-                g_pNewUISystem->Hide(INTERFACE_PURCHASESHOP_INVENTORY);
-            }
-
-            return true;
-        }
     }
 
     return false;

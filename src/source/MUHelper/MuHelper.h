@@ -28,6 +28,9 @@ namespace MUHelper
 		void Toggle();
 		void TriggerStart();
 		void TriggerStop();
+		void ResetSessionState(bool notifyServer);
+		void ResumeAfterReconnect();
+		bool ShouldAcceptServerStart() const;
 		bool IsActive() { return m_bActive; }
 		void AddCost(int iCost) { m_iTotalCost += iCost; }
 		int GetTotalCost() { return m_iTotalCost; }
@@ -53,6 +56,7 @@ namespace MUHelper
 		int Attack();
 		int RepairEquipments();
 		int Regroup();
+		bool IsAttackSkillUsable(ActionSkillType iSkill) const;
 		ActionSkillType SelectAttackSkill();
 		int SimulateAttack(ActionSkillType iSkill);
 		int SimulateSkill(ActionSkillType iSkill, bool bTargetRequired, int iTarget);
@@ -60,14 +64,21 @@ namespace MUHelper
 		int SimulateComboAttack();
 		int GetNearestTarget();
 		int GetFarthestAttackingTarget();
+		void SeedVisibleTargets();
 		void CleanupTargets();
+		bool CanRunInCurrentArea() const;
+		bool IsAttackableTarget(CHARACTER* pTarget) const;
 		int ComputeDistanceByRange(int iRange);
 		int ComputeDistanceFromTarget(CHARACTER* pTarget);
 		int ComputeDistanceBetween(POINT posA, POINT posB);
 		int SimulateMove(POINT posMove);
 		int ObtainItem();
 		int SelectItemToObtain();
+		int SelectAzothItemToObtain();
+		bool IsAzothDrop(int iItemId) const;
+		bool RequestPickupItem(int iItemId);
 		bool ShouldObtainItem(int iItemId);
+		void AutoDistributeStatPoints();
 		ActionSkillType GetHealingSkill();
 		ActionSkillType GetDrainLifeSkill();
 		bool HasAssignedBuffSkill();
@@ -77,10 +88,11 @@ namespace MUHelper
 		ConfigData m_config;
 		POINT m_posOriginal;
 		std::thread m_timerThread;
-		std::atomic<bool> m_bActive;
+		std::atomic<bool> m_bActive{ false };
 		std::set<int> m_setTargets;
 		std::set<int> m_setTargetsAttacking;
 		std::set<int> m_setItems;
+		std::atomic<bool> m_bStartRequested{ false };
 		int m_iCurrentItem;
 		int m_iCurrentTarget;
 		int m_iCurrentBuffIndex;
@@ -91,6 +103,7 @@ namespace MUHelper
 		int m_iHuntingDistance;
 		int m_iObtainingDistance;
 		int m_iLoopCounter;
+		int m_iAutoPointLoopCounter;
 		int m_iSecondsElapsed;
 		int m_iSecondsAway;
 		bool m_bTimerActivatedBuffOngoing;

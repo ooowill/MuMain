@@ -54,6 +54,21 @@ extern ITEM   TargetItem;
 void ItemObjectAttribute(OBJECT* o);
 void CreateItemDrop(ITEM_t* ip, ItemCreationParams params, vec3_t position, bool isFreshDrop);
 void CreateMoneyDrop(ITEM_t* ip, int amount, vec3_t position, bool isFreshDrop);
+
+constexpr int AZOTH_MONEY_DROP_ENCODED_BASE = 2147483000;
+constexpr int AZOTH_MONEY_DROP_MAX_AMOUNT = 10;
+
+inline bool IsAzothMoneyDropAmount(int amount)
+{
+    return amount > AZOTH_MONEY_DROP_ENCODED_BASE
+        && amount <= AZOTH_MONEY_DROP_ENCODED_BASE + AZOTH_MONEY_DROP_MAX_AMOUNT;
+}
+
+inline int DecodeAzothMoneyDropAmount(int amount)
+{
+    return IsAzothMoneyDropAmount(amount) ? amount - AZOTH_MONEY_DROP_ENCODED_BASE : amount;
+}
+
 void PartObjectColor(int Type, float Alpha, float Bright, vec3_t Light, bool ExtraMon = false);
 void PartObjectColor2(int Type, float Alpha, float Bright, vec3_t Light, bool ExtraMon = false);
 

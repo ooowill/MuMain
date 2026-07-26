@@ -23,6 +23,24 @@ void PacketFunctions_ClientToServer_Custom::SendLogin(const wchar_t* username, c
     dotnet_SendLogin(this->GetHandle(), username, password, GetTickCount(), clientVersion, clientSerial);
 }
 
+typedef void(CORECLR_DELEGATE_CALLTYPE* SendAntiCheatLaunchTicket)(int32_t, const wchar_t*, const wchar_t*, const wchar_t*, const wchar_t*, const wchar_t*);
+inline SendAntiCheatLaunchTicket dotnet_SendAntiCheatLaunchTicket = reinterpret_cast<SendAntiCheatLaunchTicket>(symLoad(munique_client_library_handle, "ConnectionManager_SendAntiCheatLaunchTicket"));
+
+void PacketFunctions_ClientToServer_Custom::SendAntiCheatLaunchTicket(
+    const wchar_t* ticket,
+    const wchar_t* clientBuildId,
+    const wchar_t* manifestVersion,
+    const wchar_t* launcherVersion,
+    const wchar_t* policyVersion)
+{
+    if (dotnet_SendAntiCheatLaunchTicket == nullptr)
+    {
+        return;
+    }
+
+    dotnet_SendAntiCheatLaunchTicket(this->GetHandle(), ticket, clientBuildId, manifestVersion, launcherVersion, policyVersion);
+}
+
 typedef void(CORECLR_DELEGATE_CALLTYPE* SendAuthenticateExt)(int32_t, uint16_t, uint32_t);
 inline SendAuthenticateExt dotnet_SendAuthenticateExt = reinterpret_cast<SendAuthenticateExt>(symLoad(munique_client_library_handle, "ConnectionManager_SendAuthenticateExt"));
 

@@ -3,12 +3,22 @@
 ///////////////////////////////////////////////////////////////////////////////
 
 #include "stdafx.h"
-#include "CharacterScene.h"
+#include <array>
+#include <cmath>
+#include <cstdlib>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <vector>#include "CharacterScene.h"
 #include "SceneCore.h"
+#include "Character/AccountCharacterList.h"
+#include "Character/AccountCharacterPaging.h"
+#include "Character/AccountCompanionClient.h"
 #include "Character/CharacterManager.h"
 #include "World/MapInfra/MapManager.h"
+#include "World/GameMaps/LoginSceneEnvironment.h"
 #include "Render/Textures/ZzzOpenglUtil.h"
-#include "Engine/Object/ZzzObject.h"
+#include "Render/Sprites/GlobalBitmap.h"#include "Engine/Object/ZzzObject.h"
 #include "Engine/Object/ZzzCharacter.h"
 #include "Render/Terrain/ZzzLodTerrain.h"
 #include "Engine/Object/ZzzInterface.h"
@@ -34,7 +44,10 @@
 #ifdef _EDITOR
 #include "Camera/CameraMode.h"
 #include "Camera/FrustumRenderer.h"
+#include "Map/MapEditorSession.h"
 #endif
+
+#include <string>
 
 // External declarations
 extern EGameScene SceneFlag;
@@ -60,15 +73,37 @@ BOOL Util_CheckOption(std::wstring lpszCommandLine, wchar_t cOption, std::wstrin
 void StartGame()
 {
     {
-        if (SelectedHero < 0 || SelectedHero >= MAX_CHARACTERS_PER_ACCOUNT)
+        g_ErrorReport.Write(
+            L"[StartGame] selected=%d currentPage=%d\r\n",
+            SelectedHero,
+            AccountCharacterPaging::GetCurrentPage() + 1);
+
+        if (SelectedHero < 0 || SelectedHero >= AccountCharacterList::NativeVisibleSlots)
         {
+            g_ErrorReport.Write(L"[StartGame] ignored invalid selected slot\r\n");
+            return;
+        }
+
+        if (!CharactersClient[SelectedHero].Object.Live || CharactersClient[SelectedHero].ID[0] == L'\0')
+        {
+            g_ErrorReport.Write(
+                L"[StartGame] ignored empty selected slot=%d live=%d\r\n",
+                SelectedHero,
+                CharactersClient[SelectedHero].Object.Live ? 1 : 0);
             return;
         }
 
         if (CTLCODE_01BLOCKCHAR & CharactersClient[SelectedHero].CtlCode)
+        {
+            g_ErrorReport.Write(
+                L"[StartGame] blocked character name=\"%ls\"\r\n",
+                CharactersClient[SelectedHero].ID);
             CUIMng::Instance().PopUpMsgWin(MESSAGE_BLOCKED_CHARACTER);
+        }
         else
         {
+            const bool isGuardSwitch = AccountCompanionClient::HasPendingSwitchTarget();
+            AccountCompanionClient::ResetLocalState();
             CharacterAttribute->Level = CharactersClient[SelectedHero].Level;
             CharacterAttribute->Class = CharactersClient[SelectedHero].Class;
             CharacterAttribute->Skin = CharactersClient[SelectedHero].Skin;
@@ -77,6 +112,17 @@ void StartGame()
             ::ReleaseCharacterSceneData();
             InitLoading = false;
             SceneFlag = LOADING_SCENE;
+
+            g_ErrorReport.Write(
+                L"[StartGame] loading name=\"%ls\" level=%d class=%d\r\n",
+                CharacterAttribute->Name,
+                CharacterAttribute->Level,
+                CharacterAttribute->Class);
+
+            if (isGuardSwitch)
+            {
+                AccountCompanionClient::ClearPendingSwitchTarget();
+            }
         }
     }
 }
@@ -101,6 +147,7 @@ void CreateCharacterScene()
 
     SelectedHero = -1;
     CUIMng::Instance().CreateCharacterScene();
+    AccountCharacterPaging::RefreshVisibleCharacters();
 
     ClearInventory();
     CharacterAttribute->SkillNumber = 0;
@@ -145,6 +192,52 @@ void CreateCharacterScene()
     g_ErrorReport.Write(L"> Character scene init success.\r\n");
 }
 
+namespace
+{
+    bool TryAutoSelectPendingGuardSwitch()
+    {
+        wchar_t targetName[MAX_USERNAME_SIZE + 1] = {};
+        if (!AccountCompanionClient::GetPendingSwitchTarget(targetName, MAX_USERNAME_SIZE + 1))
+        {
+            return false;
+        }
+
+        const int accountSlot = AccountCharacterList::FindSlotByName(targetName);
+        if (accountSlot < 0)
+        {
+            return false;
+        }
+
+        if (!AccountCharacterPaging::IsSlotOnCurrentPage(accountSlot))
+        {
+            AccountCharacterPaging::SetPageForSlot(accountSlot);
+            CUIMng::Instance().m_CharSelMainWin.UpdateDisplay();
+            CUIMng::Instance().m_CharInfoBalloonMng.UpdateDisplay();
+            return true;
+        }
+
+        const int visibleIndex = accountSlot - AccountCharacterPaging::GetFirstSlotOnCurrentPage();
+        if (visibleIndex < 0 || visibleIndex >= AccountCharacterPaging::SlotsPerPage)
+        {
+            AccountCompanionClient::ClearPendingSwitchTarget();
+            return false;
+        }
+
+        CHARACTER& character = CharactersClient[visibleIndex];
+        if (!character.Object.Live || std::wcscmp(character.ID, targetName) != 0)
+        {
+            AccountCharacterPaging::RefreshVisibleCharacters();
+            return true;
+        }
+
+        SelectedCharacter = visibleIndex;
+        SelectedHero = visibleIndex;
+        CUIMng::Instance().m_CharSelMainWin.UpdateDisplay();
+        ::StartGame();
+        return true;
+    }
+}
+
 void NewMoveCharacterScene()
 {
     if (CurrentProtocolState < RECEIVE_CHARACTERS_LIST)
@@ -156,7 +249,16 @@ void NewMoveCharacterScene()
     {
         InitCharacterScene = true;
         CreateCharacterScene();
+        CUIMng::Instance().m_CharSelMainWin.UpdateDisplay();
+        CUIMng::Instance().m_CharInfoBalloonMng.UpdateDisplay();
     }
+
+    if (TryAutoSelectPendingGuardSwitch())
+    {
+        g_ConsoleDebug->UpdateMainScene();
+        return;
+    }
+
     InitTerrainLight();
     MoveObjects();
     MoveMounts();
@@ -175,6 +277,10 @@ void NewMoveCharacterScene()
 
     ThePetProcess().UpdatePets();
 
+#ifdef _EDITOR
+    g_MapEditorSession.Update();
+#endif
+
 #if defined _DEBUG || defined FOR_WORK
     std::wstring lpszTemp = { 0 };
     if (::Util_CheckOption(::GetCommandLine(), L'c', lpszTemp))
@@ -191,7 +297,7 @@ void NewMoveCharacterScene()
     {
         if (!(rUIMng.m_MsgWin.IsShow() || rUIMng.m_CharMakeWin.IsShow()
             || rUIMng.m_SysMenuWin.IsShow() || rUIMng.m_OptionWin.IsShow())
-            && SelectedHero > -1 && SelectedHero < MAX_CHARACTERS_PER_ACCOUNT)
+            && SelectedHero > -1 && SelectedHero < AccountCharacterList::NativeVisibleSlots)
         {
             ::PlayBuffer(SOUND_CLICK01);
 
@@ -210,7 +316,7 @@ void NewMoveCharacterScene()
 
     if (rInput.IsLBtnDbl() && rUIMng.m_CharSelMainWin.IsShow())
     {
-        if (SelectedCharacter < 0 || SelectedCharacter >= MAX_CHARACTERS_PER_ACCOUNT)
+        if (SelectedCharacter < 0 || SelectedCharacter >= AccountCharacterList::NativeVisibleSlots)
         {
             return;
         }
@@ -220,7 +326,7 @@ void NewMoveCharacterScene()
     }
     else if (rInput.IsLBtnDn())
     {
-        if (SelectedCharacter < 0 || SelectedCharacter >= MAX_CHARACTERS_PER_ACCOUNT)
+        if (SelectedCharacter < 0 || SelectedCharacter >= AccountCharacterList::NativeVisibleSlots)
             SelectedHero = -1;
         else
             SelectedHero = SelectedCharacter;
@@ -238,33 +344,36 @@ void NewMoveCharacterScene()
  */
 static void SetupCharacterSceneViewport(int& outWidth, int& outHeight)
 {
-    vec3_t pos;
-    Vector(9758.0f, 18913.0f, 675.0f, pos);
+    constexpr float kSelectedCharacterHeight = 172.0f;
 
     MoveMainCamera();
+    MoveCamera();
 
     glColor3f(1.f, 1.f, 1.f);
     outHeight = REFERENCE_HEIGHT;
     outWidth = GetScreenWidth();
 
-    glClearColor(0.f, 0.f, 0.f, 1.f);
-    BeginOpengl(0, 25, REFERENCE_WIDTH, 430);
+    glClearColor(0.035f, 0.018f, 0.075f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    BeginOpengl(0, 0, REFERENCE_WIDTH, REFERENCE_HEIGHT);
 
     // Build global frustum arrays for TestFrustrum/TestFrustrum2D
     // Must be called after BeginOpengl (needs GL matrices) in every scene that renders terrain/objects
     {
         vec3_t cameraPos;
         VectorCopy(g_Camera.Position, cameraPos);
-        CreateFrustrum((float)outWidth / (float)REFERENCE_WIDTH, 430.f / (float)REFERENCE_HEIGHT, cameraPos);
+        CreateFrustrum((float)outWidth / (float)REFERENCE_WIDTH, 1.0f, cameraPos);
     }
 
     CameraProjection::ScreenToWorldRay(g_Camera, MouseX, MouseY, MouseTarget);
 
     // Reset character positions and lighting
-    for (int i = 0; i < MAX_CHARACTERS_PER_ACCOUNT; i++)
+    const bool showSelectedCharacter = !CUIMng::Instance().m_CharMakeWin.IsShow();
+    for (int i = 0; i < AccountCharacterList::NativeVisibleSlots; i++)
     {
-        CharactersClient[i].Object.Position[2] = 163.0f;
+        CharactersClient[i].Object.Position[2] = kSelectedCharacterHeight;
         Vector(0.0f, 0.0f, 0.0f, CharactersClient[i].Object.Light);
+        CharactersClient[i].Object.Visible = showSelectedCharacter && i == SelectedHero;
     }
 }
 
@@ -273,7 +382,7 @@ static void SetupCharacterSceneViewport(int& outWidth, int& outHeight)
  */
 static void ApplySelectedCharacterLighting()
 {
-    if (SelectedHero == -1)
+    if (SelectedHero < 0 || SelectedHero >= AccountCharacterList::NativeVisibleSlots)
         return;
 
     OBJECT* o = &CharactersClient[SelectedHero].Object;
@@ -295,6 +404,10 @@ static void RenderCharacterScene3D()
 {
     RenderTerrain(false);
     RenderObjects();
+#ifdef _EDITOR
+    g_MapEditorSession.RenderSelection();
+#endif
+    LoginSceneEnvironment::RenderCharacterFountainEffects();
     RenderCharactersClient();
 
     if (!CUIMng::Instance().IsCursorOnUI())
@@ -315,7 +428,10 @@ static void RenderCharacterScene3D()
  */
 static void RenderSelectedCharacterEffects()
 {
-    if (SelectedHero == -1)
+    if (CUIMng::Instance().m_CharMakeWin.IsShow())
+        return;
+
+    if (SelectedHero < 0 || SelectedHero >= AccountCharacterList::NativeVisibleSlots)
         return;
 
     OBJECT* o = &CharactersClient[SelectedHero].Object;
@@ -327,21 +443,20 @@ static void RenderSelectedCharacterEffects()
     constexpr float AURORA_FREQUENCY = 0.0015f;
     constexpr float AURORA_AMPLITUDE = 0.3f;
     constexpr float AURORA_BASE_LUMINANCE = 0.5f;
+    constexpr float AURORA_SOLE_OFFSET = 1.0f;
 
     vec3_t vLight;
     Vector(1.0f, 1.0f, 1.f, vLight);
     float fLumi = sinf(WorldTime * AURORA_FREQUENCY) * AURORA_AMPLITUDE + AURORA_BASE_LUMINANCE;
     Vector(fLumi * vLight[0], fLumi * vLight[1], fLumi * vLight[2], vLight);
 
-    EnableAlphaBlend();
-    RenderTerrainAlphaBitmap(BITMAP_GM_AURORA, o->Position[0], o->Position[1], 1.8f, 1.8f, vLight, WorldTime * 0.01f);
-    RenderTerrainAlphaBitmap(BITMAP_GM_AURORA, o->Position[0], o->Position[1], 1.2f, 1.2f, vLight, -WorldTime * 0.01f);
-    DisableAlphaBlend();
+    const float auraHeight =
+        o->Position[2] - RequestTerrainHeight(o->Position[0], o->Position[1]) + AURORA_SOLE_OFFSET;
 
-    float Rotation = (int)WorldTime % 3600 / (float)10.f;
-    Vector(0.15f, 0.15f, 0.15f, o->Light);
-    CreateParticleFpsChecked(BITMAP_EFFECT, o->Position, o->Angle, o->Light, 4);
-    CreateParticleFpsChecked(BITMAP_EFFECT, o->Position, o->Angle, o->Light, 5);
+    EnableAlphaBlend();
+    RenderTerrainAlphaBitmap(BITMAP_GM_AURORA, o->Position[0], o->Position[1], 1.8f, 1.8f, vLight, WorldTime * 0.01f, 1.0f, auraHeight);
+    RenderTerrainAlphaBitmap(BITMAP_GM_AURORA, o->Position[0], o->Position[1], 1.2f, 1.2f, vLight, -WorldTime * 0.01f, 1.0f, auraHeight);
+    DisableAlphaBlend();
 
     g_csMapServer.SetHeroID((wchar_t*)CharactersClient[SelectedHero].ID);
 }
@@ -358,6 +473,7 @@ static void RenderCharacterSceneUI()
     EndSprite();
 
     BeginBitmap();
+    LoginSceneEnvironment::RenderCharacterSceneSkyEffects();
     RenderInfomation();
 
 #ifdef ENABLE_EDIT
@@ -383,6 +499,11 @@ static void RenderCharacterSceneUI()
  */
 bool NewRenderCharacterScene(HDC hDC)
 {
+    if (AccountCompanionClient::HasPendingSwitchTarget())
+    {
+        return true;
+    }
+
     if (!InitCharacterScene)
     {
         return false;

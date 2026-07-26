@@ -10,6 +10,7 @@
 #include "Audio/DSPlaySound.h"
 #include "Engine/Object/ZzzOpenData.h"
 #include "Render/Terrain/ZzzLodTerrain.h"
+#include "Scenes/SceneCore.h"
 
 
 
@@ -102,7 +103,16 @@ bool CGMDoppelGanger3::MoveObject(OBJECT* o)
 
 bool CGMDoppelGanger3::MoveMonsterVisual(OBJECT* o, BMD* b)
 {
+    if (o == NULL || b == NULL)
+        return false;
+
+    if (SceneFlag == LOG_IN_SCENE || SceneFlag == CHARACTER_SCENE)
+        return false;
+
     if (IsDoppelGanger3() == false)
+        return false;
+
+    if (b->NumBones <= 0 || b->Bones == NULL)
         return false;
 
     switch (o->Type)

@@ -31,6 +31,7 @@
 #include "Render/Models/BoneManager.h"
 #include "GameLogic/Events/w_CursedTemple.h"
 #include "Character/CharacterManager.h"
+#include "World/GameMaps/LoginSceneEnvironment.h"
 #include "World/MapInfra/w_MapHeaders.h"
 #include "GameLogic/Social/MonkSystem.h"
 #include "UI/NewUI/NewUISystem.h"
@@ -38,6 +39,9 @@
 #include "Camera/CameraProjection.h"
 #include "Camera/OrbitalCamera.h"
 #include "Engine/Object/CullingConstants.h"
+#include "Data/GameConfig/GameConfig.h"
+
+#include <algorithm>
 
 // DevEditor function declarations
 #ifdef _EDITOR
@@ -3279,6 +3283,11 @@ void RenderObjects()
     s_fCullRadiusItem = DevEditor_GetCullRadiusItem();
 #endif
 
+    if (SceneFlag == MAIN_SCENE && GameConfig::GetInstance().GetHideWorldObjects())
+    {
+        return;
+    }
+
     float   range = 0.f;
     if (gMapManager.WorldActive == WD_10HEAVEN)
     {
@@ -3288,6 +3297,10 @@ void RenderObjects()
     if (Time_Effect > 40)
         Time_Effect = 0;
     Time_Effect += FPS_ANIMATION_FACTOR;
+
+    constexpr int MaxDeferredCharacterSceneObjects = 32;
+    OBJECT* deferredCharacterSceneObjects[MaxDeferredCharacterSceneObjects] = {};
+    int deferredCharacterSceneObjectCount = 0;
 
     for (int i = 0; i < 16; i++)
     {
@@ -3325,7 +3338,7 @@ void RenderObjects()
 #ifdef _EDITOR
                                 float fDis = DevEditor_GetLoginObjectDist();
 #else
-                                float fDis = LoginSceneCameraDefaults::RENDER_OBJECT_DIST;
+                                const float fDis = LoginSceneCameraDefaults::RENDER_OBJECT_DIST;
 #endif
 
                                 if (((o->Type >= 122 && o->Type <= 124) || (o->Type == 159) || (o->Type == 126) || (o->Type == 129) || (o->Type == 127)) &&
@@ -3368,10 +3381,23 @@ void RenderObjects()
                                 RenderObject(o);
                                 RenderObjectVisual(o);
                             }
-                            else if ((gMapManager.WorldActive == WD_74NEW_CHARACTER_SCENE) && (o->Type == 129 || o->Type == 98))
+                            else if ((gMapManager.WorldActive == WD_74NEW_CHARACTER_SCENE)
+                                && (o->Type == 129
+                                    || o->Type == 98
+                                    || LoginSceneEnvironment::ShouldRenderBeyondBlockCulling(o->Type)))
                             {
-                                RenderObject(o);
-                                RenderObjectVisual(o);
+                                if (LoginSceneEnvironment::ShouldDeferUntilOpaqueObjectsRendered(o->Type))
+                                {
+                                    if (deferredCharacterSceneObjectCount < MaxDeferredCharacterSceneObjects)
+                                    {
+                                        deferredCharacterSceneObjects[deferredCharacterSceneObjectCount++] = o;
+                                    }
+                                }
+                                else
+                                {
+                                    RenderObject(o);
+                                    RenderObjectVisual(o);
+                                }
                             }
                             else if ((gMapManager.WorldActive == WD_57ICECITY || gMapManager.WorldActive == WD_58ICECITY_BOSS) && (o->Type == 30 || o->Type == 31) && TestFrustrum2D(o->Position[0] * 0.01f, o->Position[1] * 0.01f, -600.f))
                             {
@@ -3418,7 +3444,10 @@ void RenderObjects()
                                     if ((gMapManager.IsPKField() || IsDoppelGanger2()) && (o->Type == 16 || o->Type == 67 || o->Type == 68));
                                     else
                                         if (gMapManager.WorldActive == WD_73NEW_LOGIN_SCENE);
-                                        else if ((gMapManager.WorldActive == WD_74NEW_CHARACTER_SCENE) && (o->Type == 129 || o->Type == 98));
+                                        else if ((gMapManager.WorldActive == WD_74NEW_CHARACTER_SCENE)
+                                            && (o->Type == 129
+                                                || o->Type == 98
+                                                || LoginSceneEnvironment::ShouldRenderBeyondBlockCulling(o->Type)));
 
                                         else
                                             if (o->Visible || g_Camera.TopViewEnable)
@@ -3460,6 +3489,12 @@ void RenderObjects()
             }
         }
     }
+
+    for (int i = 0; i < deferredCharacterSceneObjectCount; ++i)
+    {
+        RenderObject(deferredCharacterSceneObjects[i]);
+        RenderObjectVisual(deferredCharacterSceneObjects[i]);
+    }
 }
 
 void RenderObject_AfterCharacter(OBJECT* o, bool Translate, int Select, int ExtraMon)
@@ -3491,6 +3526,11 @@ void Draw_RenderObject_AfterCharacter(OBJECT* o, bool Translate, int Select, int
 
 void RenderObjects_AfterCharacter()
 {
+    if (SceneFlag == MAIN_SCENE && GameConfig::GetInstance().GetHideWorldObjects())
+    {
+        return;
+    }
+
     if (!(gMapManager.WorldActive == WD_37KANTURU_1ST || gMapManager.WorldActive == WD_38KANTURU_2ND || gMapManager.WorldActive == WD_39KANTURU_3RD
         || gMapManager.WorldActive == WD_40AREA_FOR_GM
         || gMapManager.WorldActive == WD_41CHANGEUP3RD_1ST
@@ -6007,10 +6047,27 @@ void ItemAngle(OBJECT* o)
 
 void CreateItemDrop(ITEM_t* ip, ItemCreationParams params, vec3_t position, bool isFreshDrop)
 {
+    if (ip == nullptr)
+    {
+        return;
+    }
+
+    OBJECT* o = &ip->Object;
+    o->Live = false;
+    o->Type = -1;
+
     int Type = params.Group * MAX_ITEM_INDEX + params.Number;
+    if (params.Group < 0 || params.Group >= MAX_ITEM_TYPE
+        || params.Number < 0 || params.Number >= MAX_ITEM_INDEX
+        || Type < 0 || Type >= MAX_ITEM)
+    {
+        ip->Item.Type = -1;
+        return;
+    }
+
     ITEM* n = &ip->Item;
     n->Type = Type;
-    n->Level = params.Level;
+    n->Level = std::clamp<int>(params.Level, 0, 15);
     n->HasSkill = params.WithSkill;
     n->HasLuck = params.WithLuck;
     n->OptionLevel = params.OptionLevel;
@@ -6021,19 +6078,6 @@ void CreateItemDrop(ITEM_t* ip, ItemCreationParams params, vec3_t position, bool
     n->AncientBonusOption = params.AncientBonusOption;
     n->option_380 = params.HasGuardianOption;
 
-    if (isFreshDrop)
-    {
-        if (Type == ITEM_JEWEL_OF_BLESS || Type == ITEM_JEWEL_OF_SOUL || Type == ITEM_JEWEL_OF_LIFE || Type == ITEM_JEWEL_OF_CHAOS || Type == ITEM_JEWEL_OF_CREATION || Type == ITEM_JEWEL_OF_GUARDIAN)
-            PlayBuffer(SOUND_JEWEL01, &ip->Object);
-        else if (Type == ITEM_GEMSTONE)
-            PlayBuffer(SOUND_JEWEL02, &ip->Object);
-        else
-            PlayBuffer(SOUND_DROP_ITEM01, &ip->Object);
-    }
-    
-
-    OBJECT* o = &ip->Object;
-    o->Live = true;
     o->Type = MODEL_ITEM + Type;
     o->SubType = 1;
     if (Type == (int)(ITEM_BOX_OF_LUCK))
@@ -6211,10 +6255,30 @@ void CreateItemDrop(ITEM_t* ip, ItemCreationParams params, vec3_t position, bool
     }
 
     ItemAngle(o);
+    o->Live = true;
+
+    if (isFreshDrop)
+    {
+        if (Type == ITEM_JEWEL_OF_BLESS || Type == ITEM_JEWEL_OF_SOUL || Type == ITEM_JEWEL_OF_LIFE || Type == ITEM_JEWEL_OF_CHAOS || Type == ITEM_JEWEL_OF_CREATION || Type == ITEM_JEWEL_OF_GUARDIAN)
+            PlayBuffer(SOUND_JEWEL01, o);
+        else if (Type == ITEM_GEMSTONE)
+            PlayBuffer(SOUND_JEWEL02, o);
+        else
+            PlayBuffer(SOUND_DROP_ITEM01, o);
+    }
 }
 
 void CreateMoneyDrop(ITEM_t* ip, int amount, vec3_t position, bool isFreshDrop)
 {
+    if (ip == nullptr)
+    {
+        return;
+    }
+
+    OBJECT* o = &ip->Object;
+    o->Live = false;
+    o->Type = -1;
+
     int Type = ITEM_ZEN;
     ITEM* n = &ip->Item;
     n->Type = Type;
@@ -6222,13 +6286,6 @@ void CreateMoneyDrop(ITEM_t* ip, int amount, vec3_t position, bool isFreshDrop)
     n->Durability = 0;
     n->ExcellentFlags = 0;
     n->AncientDiscriminator = 0;
-    if (isFreshDrop)
-    {
-        PlayBuffer(SOUND_DROP_GOLD01);
-    }
-
-    OBJECT* o = &ip->Object;
-    o->Live = true;
     o->Type = MODEL_ITEM + Type;
     o->SubType = 1;
     
@@ -6238,8 +6295,16 @@ void CreateMoneyDrop(ITEM_t* ip, int amount, vec3_t position, bool isFreshDrop)
     VectorCopy(position, o->Position);
     if (isFreshDrop)
     {
-        o->Position[2] = RequestTerrainHeight(o->Position[0], o->Position[1]) + 180.f;
-        o->Gravity = 20.f;
+        if (IsAzothMoneyDropAmount(amount))
+        {
+            o->Position[2] = RequestTerrainHeight(o->Position[0], o->Position[1]) + 30.f;
+            o->Gravity = 0.f;
+        }
+        else
+        {
+            o->Position[2] = RequestTerrainHeight(o->Position[0], o->Position[1]) + 180.f;
+            o->Gravity = 20.f;
+        }
     }
     else
     {
@@ -6247,6 +6312,12 @@ void CreateMoneyDrop(ITEM_t* ip, int amount, vec3_t position, bool isFreshDrop)
     }
 
     ItemAngle(o);
+    o->Live = true;
+
+    if (isFreshDrop)
+    {
+        PlayBuffer(SOUND_DROP_GOLD01);
+    }
 }
 
 void CreateShiny(OBJECT* o)
@@ -6261,6 +6332,25 @@ void CreateShiny(OBJECT* o)
         VectorAdd(o->Position, Position, Position);
         vec3_t Light;
         Vector(1.f, 1.f, 1.f, Light);
+
+        CreateParticle(BITMAP_SHINY, Position, o->Angle, Light);
+        CreateParticle(BITMAP_SHINY, Position, o->Angle, Light, 1);
+    }
+}
+
+void CreateAzothShiny(OBJECT* o)
+{
+    if (o->SubType++ % 24 == 0)
+    {
+        float Matrix[3][4];
+        AngleMatrix(o->Angle, Matrix);
+        vec3_t p;
+        Vector((float)(rand() % 32 + 16), 0.f, (float)(rand() % 32 + 16), p);
+        vec3_t Position;
+        VectorRotate(p, Matrix, Position);
+        VectorAdd(o->Position, Position, Position);
+        vec3_t Light;
+        Vector(0.18f, 0.65f, 1.0f, Light);
 
         CreateParticle(BITMAP_SHINY, Position, o->Angle, Light);
         CreateParticle(BITMAP_SHINY, Position, o->Angle, Light, 1);
@@ -6327,7 +6417,14 @@ void MoveItems()
             // Create shiny particle effect
             if (rand_fps_check(1))
             {
-                CreateShiny(o);
+                if (o->Type == MODEL_ZEN && IsAzothMoneyDropAmount(Items[i].Item.Level))
+                {
+                    CreateAzothShiny(o);
+                }
+                else
+                {
+                    CreateShiny(o);
+                }
             }
         }
     }
@@ -6356,7 +6453,11 @@ void RenderZen(int itemIndex, ITEM_t* item, vec3_t light)
     vec3_t tempPosition;
     VectorCopy(o->Position, tempPosition);
 
-    int coinCount = static_cast<int>(sqrtf(static_cast<float>(Items[k].Item.Level))) / 2;
+    const bool isAzothDrop = IsAzothMoneyDropAmount(Items[k].Item.Level);
+    const int displayAmount = DecodeAzothMoneyDropAmount(Items[k].Item.Level);
+    int coinCount = isAzothDrop
+        ? 6 + (displayAmount * 2)
+        : static_cast<int>(sqrtf(static_cast<float>(displayAmount))) / 2;
 
     coinCount = std::max<int>(std::min<int>(coinCount, 80), 3);
 
@@ -6370,6 +6471,11 @@ void RenderZen(int itemIndex, ITEM_t* item, vec3_t light)
 
     BoneScale = 1.f;
     BodyLight(o, b);
+    if (isAzothDrop)
+    {
+        const float pulse = (sinf(WorldTime * 0.006f) + 1.0f) * 0.12f;
+        Vector(0.18f + pulse, 0.62f + pulse, 1.25f + pulse, b->BodyLight);
+    }
 
     constexpr auto alpha = 1.0f;
     b->BeginRender(alpha);
@@ -9436,7 +9542,20 @@ extern float g_Luminosity;
 
 void RenderPartObjectEffect(OBJECT* o, int Type, vec3_t Light, float Alpha, int ItemLevel, int ExcellentFlags, int ancientDiscriminator, int Select, int RenderType)
 {
+    if (gMapManager.WorldActive == WD_74NEW_CHARACTER_SCENE)
+    {
+        o->EnableShadow = false;
+        o->m_bRenderShadow = false;
+    }
+
     int Level = ItemLevel;
+    if (GameConfig::GetInstance().GetReduceCharacterGlow())
+    {
+        Level = 0;
+        ExcellentFlags = 0;
+        ancientDiscriminator = 0;
+    }
+
     if (RenderType & RENDER_WAVE)
     {
         Level = 0;

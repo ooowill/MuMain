@@ -11,6 +11,8 @@
 #include "Scenes/SceneCore.h"          // SceneFlag, szServerIpAddress, g_ServerPort
 #include "Scenes/SceneCommon.h"        // SelectedHero, MAX_CHARACTERS_PER_ACCOUNT
 #include "Scenes/CharacterScene.h"     // StartGame
+#include "Character/AccountCharacterList.h"
+#include "Character/AccountCharacterPaging.h"
 #include "Engine/Object/ZzzCharacter.h"// CharactersClient
 #include "UI/Legacy/UIMng.h"           // CUIMng, m_LoginWin
 #include "MUHelper/MuHelper.h"         // MUHelper::g_MuHelper
@@ -35,6 +37,7 @@ extern wchar_t LogInID[MAX_USERNAME_SIZE + 1];
 extern BYTE Version[SIZE_PROTOCOLVERSION];
 extern BYTE Serial[SIZE_PROTOCOLSERIAL + 1];
 extern BOOL g_bGameServerConnected;
+void SendAntiCheatLaunchTicketBeforeLogin();
 
 ReconnectManager& ReconnectManager::Instance()
 {
@@ -348,6 +351,7 @@ void ReconnectManager::UpdateConnecting()
         LogIn = 1;
         wcscpy_s(LogInID, _countof(LogInID), m_username);
         CurrentProtocolState = REQUEST_LOG_IN;
+        SendAntiCheatLaunchTicketBeforeLogin();
         SocketClient->ToGameServer()->SendLogin(m_username, m_password, Version, Serial);
 
         EnterPhase(Phase::LoggingIn);
@@ -415,7 +419,7 @@ void ReconnectManager::UpdateJoining()
         {
             // Resume the client-side MU Helper so its state matches what the
             // player left running (and so the stop toggle works again).
-            MUHelper::g_MuHelper.Start();
+            MUHelper::g_MuHelper.ResumeAfterReconnect();
             m_muHelperWasActive = false;
         }
 
@@ -463,13 +467,24 @@ bool ReconnectManager::TrySelectCachedCharacter()
         return false;
     }
 
-    for (int i = 0; i < MAX_CHARACTERS_PER_ACCOUNT; ++i)
+    for (int slot = 0; slot < AccountCharacterList::MaxCharacters; ++slot)
     {
-        if (wcscmp(CharactersClient[i].ID, m_characterName) == 0)
+        const AccountCharacterList::Entry* entry = AccountCharacterList::GetBySlot(slot);
+        if (entry == nullptr || wcscmp(entry->Name, m_characterName) != 0)
         {
-            SelectedHero = i;
-            StartGame();   // -> LOADING_SCENE -> MAIN_SCENE (sends SelectCharacter)
-            return true;
+            continue;
+        }
+
+        AccountCharacterPaging::SetPageForSlot(slot);
+        AccountCharacterPaging::RefreshVisibleCharacters();
+        for (int visibleIndex = 0; visibleIndex < AccountCharacterList::NativeVisibleSlots; ++visibleIndex)
+        {
+            if (wcscmp(CharactersClient[visibleIndex].ID, m_characterName) == 0)
+            {
+                SelectedHero = visibleIndex;
+                StartGame();   // -> LOADING_SCENE -> MAIN_SCENE (sends SelectCharacter)
+                return true;
+            }
         }
     }
 
