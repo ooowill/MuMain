@@ -12896,4 +12896,7 @@
   <data name="CharacterDeleteSecurityPasswordIncorrect" xml:space="preserve">
     <value>Неверный пароль безопасности.</value>
   </data>
+  <data name="LoginWithGoogle" xml:space="preserve">
+    <value>Войти через Google</value>
+  </data>
 </root>

@@ -793,6 +793,7 @@ void CCharSelMainWin::RenderControls()
     ::EndRenderColor();
     ::DisableAlphaBlend();
 
+    ::EnableAlphaTest();
     m_sprDeco.Render();
     CWin::RenderButtons();
 }

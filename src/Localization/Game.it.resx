@@ -28,4 +28,7 @@
   <data name="CharacterDeleteSecurityPasswordIncorrect" xml:space="preserve">
     <value>La password di sicurezza non è corretta.</value>
   </data>
+  <data name="LoginWithGoogle" xml:space="preserve">
+    <value>Accedi con Google</value>
+  </data>
 </root>

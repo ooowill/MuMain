@@ -28,4 +28,7 @@
   <data name="CharacterDeleteSecurityPasswordIncorrect" xml:space="preserve">
     <value>보안 비밀번호가 올바르지 않습니다.</value>
   </data>
+  <data name="LoginWithGoogle" xml:space="preserve">
+    <value>Google로 로그인</value>
+  </data>
 </root>

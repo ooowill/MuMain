@@ -61,13 +61,75 @@ constexpr std::uint64_t GoogleLoginTimeoutMs = 180000;
 constexpr bool GoogleOnlyLogin = true;
 constexpr int LoginPanelWidth = 312;
 constexpr int LoginPanelHeight = 194;
-constexpr int GoogleLoginButtonWidth = 220;
-constexpr int GoogleLoginButtonHeight = 55;
+constexpr int GoogleLoginButtonWidth = 200;
+constexpr int GoogleLoginButtonHeight = 28;
 constexpr int GoogleLoginButtonX = (LoginPanelWidth - GoogleLoginButtonWidth) / 2;
 constexpr int GoogleLoginButtonY = 104;
+constexpr int GoogleLoginIconSize = 18;
+constexpr int GoogleLoginIconX = GoogleLoginButtonX + 14;
+constexpr int GoogleLoginIconY = GoogleLoginButtonY + (GoogleLoginButtonHeight - GoogleLoginIconSize) / 2;
+constexpr float GoogleLoginIconU = 0.0f;
+constexpr float GoogleLoginIconV = 0.0f;
+constexpr float GoogleLoginIconUWidth = 1.0f;
+constexpr float GoogleLoginIconVHeight = 1.0f;
 constexpr int GoogleLoginMaxRequestBytes = 4096;
-constexpr GLuint GoogleLoginButtonNormalTexture = BITMAP_LOG_IN + 18;
-constexpr GLuint GoogleLoginButtonHoverTexture = BITMAP_LOG_IN + 19;
+constexpr GLuint GoogleLoginIconTexture = BITMAP_LOG_IN + 18;
+constexpr const wchar_t* GoogleLoginIconPath = L"Interface\\GoogleLogin\\google_g_official_transparent.tga";
+constexpr int LoginPanelTitleDividerY = 45;
+constexpr int LoginPanelFooterDividerY = 165;
+
+int LoginLogicalX(int value)
+{
+    const float rate = g_fScreenRate_x > 0.0f ? g_fScreenRate_x : 1.0f;
+    return static_cast<int>(value / rate);
+}
+
+int LoginLogicalY(int value)
+{
+    const float rate = g_fScreenRate_y > 0.0f ? g_fScreenRate_y : 1.0f;
+    return static_cast<int>(value / rate);
+}
+
+void FillLoginPanelRect(int x, int y, int width, int height, BYTE red, BYTE green, BYTE blue, BYTE alpha)
+{
+    const float rateX = g_fScreenRate_x > 0.0f ? g_fScreenRate_x : 1.0f;
+    const float rateY = g_fScreenRate_y > 0.0f ? g_fScreenRate_y : 1.0f;
+    ::glColor4f(
+        static_cast<float>(red) / 255.0f,
+        static_cast<float>(green) / 255.0f,
+        static_cast<float>(blue) / 255.0f,
+        static_cast<float>(alpha) / 255.0f);
+    ::RenderColor(
+        static_cast<float>(x) / rateX,
+        static_cast<float>(y) / rateY,
+        static_cast<float>(width) / rateX,
+        static_cast<float>(height) / rateY,
+        0.0f,
+        0);
+}
+
+void RenderGoogleLoginPanel(int x, int y)
+{
+    ::EnableAlphaTest();
+
+    FillLoginPanelRect(x - 4, y + 4, LoginPanelWidth + 8, LoginPanelHeight + 8, 0, 0, 0, 135);
+    FillLoginPanelRect(x, y, LoginPanelWidth, LoginPanelHeight, 31, 23, 18, 245);
+    FillLoginPanelRect(x + 1, y + 1, LoginPanelWidth - 2, LoginPanelHeight - 2, 112, 78, 39, 232);
+    FillLoginPanelRect(x + 3, y + 3, LoginPanelWidth - 6, LoginPanelHeight - 6, 4, 10, 22, 242);
+    FillLoginPanelRect(x + 6, y + 6, LoginPanelWidth - 12, LoginPanelHeight - 12, 62, 70, 87, 205);
+    FillLoginPanelRect(x + 7, y + 7, LoginPanelWidth - 14, LoginPanelHeight - 14, 1, 7, 18, 216);
+
+    FillLoginPanelRect(x + 8, y + 8, LoginPanelWidth - 16, LoginPanelTitleDividerY - 9, 3, 14, 31, 225);
+    FillLoginPanelRect(x + 9, y + LoginPanelTitleDividerY, LoginPanelWidth - 18, 1, 126, 88, 40, 220);
+    FillLoginPanelRect(x + 9, y + LoginPanelTitleDividerY + 1, LoginPanelWidth - 18, 1, 25, 39, 58, 190);
+    FillLoginPanelRect(x + 9, y + LoginPanelFooterDividerY, LoginPanelWidth - 18, 1, 77, 56, 34, 180);
+
+    FillLoginPanelRect(x + 3, y + 3, LoginPanelWidth - 6, 1, 173, 122, 59, 190);
+    FillLoginPanelRect(x + 3, y + LoginPanelHeight - 4, LoginPanelWidth - 6, 1, 21, 29, 43, 220);
+
+    ::EndRenderColor();
+    ::glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+}
 bool g_googleLoginActive = false;
 std::uintptr_t g_googleListenerSocket = NoGoogleSocket;
 std::uintptr_t g_googleClientSocket = NoGoogleSocket;
@@ -88,25 +150,6 @@ struct AntiCheatLaunchTicketData
 };
 
 AntiCheatLaunchTicketData g_antiCheatLaunchTicket;
-
-enum GoogleLoginButtonTexture
-{
-    GOOGLE_LOGIN_BUTTON_NORMAL = 0,
-    GOOGLE_LOGIN_BUTTON_HOVER,
-    GOOGLE_LOGIN_BUTTON_MAX
-};
-
-struct GoogleLoginButtonTextureInfo
-{
-    const wchar_t* Path;
-    GLuint Index;
-};
-
-constexpr GoogleLoginButtonTextureInfo GoogleLoginButtonTextures[GOOGLE_LOGIN_BUTTON_MAX] =
-{
-    { L"Interface\\GoogleLogin\\google_login_normal.tga", GoogleLoginButtonNormalTexture },
-    { L"Interface\\GoogleLogin\\google_login_hover.tga", GoogleLoginButtonHoverTexture },
-};
 
 std::wstring AsciiToWide(const std::string& text)
 {
@@ -473,91 +516,49 @@ void SendLoopbackResponse(SOCKET client, bool success)
 }
 #endif
 
-bool IsCursorInGoogleButton(int baseX, int baseY)
+bool EnsureGoogleLoginIconTexture()
 {
-    CInput& input = CInput::Instance();
-    RECT buttonRect = {
-        baseX + GoogleLoginButtonX,
-        baseY + GoogleLoginButtonY,
-        baseX + GoogleLoginButtonX + GoogleLoginButtonWidth,
-        baseY + GoogleLoginButtonY + GoogleLoginButtonHeight,
-    };
-
-    return ::PtInRect(&buttonRect, input.GetCursorPos()) != FALSE;
-}
-
-bool IsGoogleButtonClicked(int baseX, int baseY)
-{
-    CInput& input = CInput::Instance();
-    return input.IsLBtnUp() && IsCursorInGoogleButton(baseX, baseY);
-}
-
-bool EnsureGoogleLoginButtonTexture(GoogleLoginButtonTexture texture)
-{
-    static bool loaded[GOOGLE_LOGIN_BUTTON_MAX] = {};
-
-    const int index = static_cast<int>(texture);
-    if (index < 0 || index >= GOOGLE_LOGIN_BUTTON_MAX)
-    {
-        return false;
-    }
-
-    if (loaded[index] && Bitmaps.FindTexture(GoogleLoginButtonTextures[index].Index) != nullptr)
+    static bool loaded = false;
+    if (loaded && Bitmaps.FindTexture(GoogleLoginIconTexture) != nullptr)
     {
         return true;
     }
 
-    loaded[index] = LoadBitmap(
-        GoogleLoginButtonTextures[index].Path,
-        GoogleLoginButtonTextures[index].Index,
+    loaded = LoadBitmap(
+        GoogleLoginIconPath,
+        GoogleLoginIconTexture,
         GL_LINEAR,
         GL_CLAMP_TO_EDGE,
         false);
     g_ErrorReport.Write(
-        L"[GoogleLoginButtonUI] %ls %ls (%u)\r\n",
-        loaded[index] ? L"loaded" : L"failed",
-        GoogleLoginButtonTextures[index].Path,
-        GoogleLoginButtonTextures[index].Index);
+        L"[GoogleLoginIconUI] %ls %ls (%u)\r\n",
+        loaded ? L"loaded" : L"failed",
+        GoogleLoginIconPath,
+        GoogleLoginIconTexture);
 
-    return loaded[index];
+    return loaded;
 }
 
-void RenderGoogleLoginButton(int baseX, int baseY)
+void RenderGoogleLoginIcon(int baseX, int baseY)
 {
-    GoogleLoginButtonTexture texture = GOOGLE_LOGIN_BUTTON_NORMAL;
-    if (IsCursorInGoogleButton(baseX, baseY)
-        && EnsureGoogleLoginButtonTexture(GOOGLE_LOGIN_BUTTON_HOVER))
+    if (!EnsureGoogleLoginIconTexture())
     {
-        texture = GOOGLE_LOGIN_BUTTON_HOVER;
-    }
-
-    if (EnsureGoogleLoginButtonTexture(texture))
-    {
-        RenderBitmap(
-            GoogleLoginButtonTextures[texture].Index,
-            static_cast<float>(baseX + GoogleLoginButtonX),
-            static_cast<float>(baseY + GoogleLoginButtonY),
-            static_cast<float>(GoogleLoginButtonWidth),
-            static_cast<float>(GoogleLoginButtonHeight),
-            0.0f,
-            0.0f,
-            1.0f,
-            1.0f,
-            false,
-            false);
         return;
     }
 
-    RenderColor(
-        static_cast<float>(baseX + GoogleLoginButtonX),
-        static_cast<float>(baseY + GoogleLoginButtonY),
-        static_cast<float>(GoogleLoginButtonWidth),
-        static_cast<float>(GoogleLoginButtonHeight),
-        0.35f,
-        0);
-    EndRenderColor();
+    RenderBitmap(
+        GoogleLoginIconTexture,
+        static_cast<float>(baseX + GoogleLoginIconX),
+        static_cast<float>(baseY + GoogleLoginIconY),
+        static_cast<float>(GoogleLoginIconSize),
+        static_cast<float>(GoogleLoginIconSize),
+        GoogleLoginIconU,
+        GoogleLoginIconV,
+        GoogleLoginIconUWidth,
+        GoogleLoginIconVHeight,
+        false,
+        false);
 }
-
 void CloseGoogleLogin()
 {
 #ifdef _WIN32
@@ -722,8 +723,24 @@ void CLoginWin::Create()
         m_Password[0] = L'\0';
     }
 
-    CWin::Create(LoginPanelWidth, LoginPanelHeight, BITMAP_LOG_IN + 7);
+    CWin::Create(LoginPanelWidth, LoginPanelHeight, -2);
 
+    DWORD googleButtonTextColors[4] =
+    {
+        ARGB(255, 210, 205, 198),
+        ARGB(255, 255, 213, 116),
+        ARGB(255, 255, 244, 210),
+        ARGB(255, 105, 102, 98),
+    };
+    m_aBtn[LIW_OK].CreateTextButton(GoogleLoginButtonWidth, GoogleLoginButtonHeight);
+    m_aBtn[LIW_OK].SetText(I18N::Game::LoginWithGoogle, googleButtonTextColors);
+    CWin::RegisterButton(&m_aBtn[LIW_OK]);
+
+    if (GoogleOnlyLogin)
+    {
+        this->FirstLoad = 0;
+        return;
+    }
     m_asprInputBox[LIW_ACCOUNT].Create(156, 23, BITMAP_LOG_IN + 8);
     m_asprInputBox[LIW_PASSWORD].Create(156, 23, BITMAP_LOG_IN + 8);
 
@@ -779,14 +796,23 @@ void CLoginWin::Create()
 
 void CLoginWin::PreRelease()
 {
-    for (int i = 0; i < 2; ++i)
-        m_asprInputBox[i].Release();
+    if (!GoogleOnlyLogin)
+    {
+        for (int i = 0; i < 2; ++i)
+        {
+            m_asprInputBox[i].Release();
+        }
+    }
 }
-
 void CLoginWin::SetPosition(int x, int y)
 {
 	CWin::SetPosition(x, y);
+    m_aBtn[LIW_OK].SetPosition(x + GoogleLoginButtonX, y + GoogleLoginButtonY);
 
+    if (GoogleOnlyLogin)
+    {
+        return;
+    }
 	const int boxOffsetX = x + 109;
 	m_asprInputBox[LIW_ACCOUNT].SetPosition(boxOffsetX, y + 106);
 	m_asprInputBox[LIW_PASSWORD].SetPosition(boxOffsetX, y + 131);
@@ -806,13 +832,17 @@ void CLoginWin::SetPosition(int x, int y)
 void CLoginWin::Show(bool bShow)
 {
     CWin::Show(bShow);
+    m_aBtn[LIW_OK].Show(GoogleOnlyLogin && bShow);
 
-    for (int i = 0; i < 2; ++i)
+    if (!GoogleOnlyLogin)
     {
-        m_asprInputBox[i].Show(bShow);
-        m_aBtn[i].Show(!GoogleOnlyLogin && bShow);
+        for (int i = 0; i < 2; ++i)
+        {
+            m_asprInputBox[i].Show(bShow);
+            m_aBtn[i].Show(bShow);
+        }
+        m_aBtnRememberMe.Show(bShow);
     }
-    m_aBtnRememberMe.Show(!GoogleOnlyLogin && bShow);
 
     // Drive the text fields' state so a hidden login screen releases keyboard
     // focus (portable fields stop SDL text input when hidden, #447).
@@ -820,7 +850,6 @@ void CLoginWin::Show(bool bShow)
     if (m_pUsernameInputBox) m_pUsernameInputBox->SetState(iState);
     if (m_pPasswordInputBox) m_pPasswordInputBox->SetState(iState);
 }
-
 bool CLoginWin::CursorInWin(int nArea)
 {
     if (!CWin::m_bShow)
@@ -863,7 +892,7 @@ void CLoginWin::UpdateWhileActive(double)
 		return;
 	}
 
-    if (GoogleOnlyLogin && IsGoogleButtonClicked(GetXPos(), GetYPos()))
+    if (GoogleOnlyLogin && m_aBtn[LIW_OK].IsClick())
     {
         PlayBuffer(SOUND_CLICK01);
         BeginGoogleLogin();
@@ -902,8 +931,6 @@ void CLoginWin::RenderControls()
         FirstLoad = 0;
     }
 
-    CWin::RenderButtons();
-
     g_pRenderText->SetFont(g_hFixFont);
     g_pRenderText->SetBgColor(0, 0, 0, 0);
     g_pRenderText->SetTextColor(CLRDW_WHITE);
@@ -913,28 +940,14 @@ void CLoginWin::RenderControls()
 
     if (GoogleOnlyLogin)
     {
-        const float rateX = g_fScreenRate_x > 0.0f ? g_fScreenRate_x : 1.0f;
-        const float rateY = g_fScreenRate_y > 0.0f ? g_fScreenRate_y : 1.0f;
+        RenderGoogleLoginPanel(baseX, baseY);
 
-        ::EnableAlphaBlend();
-        ::glColor4ub(0, 0, 0, 210);
-        ::RenderColor(
-            static_cast<float>(baseX + 12) / rateX,
-            static_cast<float>(baseY + 43) / rateY,
-            static_cast<float>(LoginPanelWidth - 24) / rateX,
-            139.0f / rateY,
-            0.0f,
-            0);
-        ::EndRenderColor();
-        ::DisableAlphaBlend();
-
-        g_pRenderText->SetBgColor(0, 0, 0, 0);
-        g_pRenderText->SetTextColor(210, 202, 213, 255);
+        g_pRenderText->SetTextColor(235, 235, 232, 255);
         g_pRenderText->RenderText(
-            static_cast<int>(baseX / rateX),
-            static_cast<int>((baseY + 14) / rateY),
+            LoginLogicalX(baseX),
+            LoginLogicalY(baseY + 17),
             L"MU Online",
-            static_cast<int>(LoginPanelWidth / rateX),
+            LoginLogicalX(LoginPanelWidth),
             0,
             RT3_SORT_CENTER);
 
@@ -947,30 +960,33 @@ void CLoginWin::RenderControls()
             serverStatus,
             g_ServerListManager->GetSelectServerName(),
             g_ServerListManager->GetSelectServerIndex());
-        g_pRenderText->SetTextColor(255, 204, 40, 255);
+        g_pRenderText->SetTextColor(255, 205, 28, 255);
         g_pRenderText->RenderText(
-            static_cast<int>(baseX / rateX),
-            static_cast<int>((baseY + 56) / rateY),
+            LoginLogicalX(baseX),
+            LoginLogicalY(baseY + 61),
             serverName,
-            static_cast<int>(LoginPanelWidth / rateX),
+            LoginLogicalX(LoginPanelWidth),
             0,
             RT3_SORT_CENTER);
 
-        RenderGoogleLoginButton(baseX, baseY);
+        CWin::RenderButtons();
+        RenderGoogleLoginIcon(baseX, baseY);
 
         if (!g_googleLoginStatus.empty())
         {
             g_pRenderText->SetTextColor(222, 219, 224, 255);
             g_pRenderText->RenderText(
-                static_cast<int>(baseX / rateX),
-                static_cast<int>((baseY + 169) / rateY),
+                LoginLogicalX(baseX),
+                LoginLogicalY(baseY + 143),
                 g_googleLoginStatus.c_str(),
-                static_cast<int>(LoginPanelWidth / rateX),
+                LoginLogicalX(LoginPanelWidth),
                 0,
                 RT3_SORT_CENTER);
         }
         return;
     }
+
+    CWin::RenderButtons();
 
     wchar_t szServerName[MAX_TEXT_LENGTH] = {};
     const wchar_t* pServerStatus = g_ServerListManager->GetNonPVPInfo() ? I18N::Game::SDServer : I18N::Game::SDNonPvPServer;
@@ -1146,9 +1162,11 @@ void CLoginWin::RequestLogin()
 
     CUIMng::Instance().HideWin(this);
 
-    m_pUsernameInputBox->GetText(m_Username, _countof(m_Username));
-    m_pPasswordInputBox->GetText(m_Password, _countof(m_Password));
-
+    if (!GoogleOnlyLogin)
+    {
+        m_pUsernameInputBox->GetText(m_Username, _countof(m_Username));
+        m_pPasswordInputBox->GetText(m_Password, _countof(m_Password));
+    }
     const bool transientTicketLogin = g_transientTicketLogin;
 
     if (!transientTicketLogin && m_aBtnRememberMe.IsCheck())
