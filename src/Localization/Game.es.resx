@@ -12881,4 +12881,19 @@
     <value>Nivel: %u | Restablecimientos: %u</value>
     <comment>legacy_id=3810</comment>
   </data>
+  <data name="LoginMenu" xml:space="preserve">
+    <value>Menú</value>
+  </data>
+  <data name="LoginCredit" xml:space="preserve">
+    <value>Créditos</value>
+  </data>
+  <data name="BuyCharacterSlot" xml:space="preserve">
+    <value>Comprar espacio</value>
+  </data>
+  <data name="CharacterDeleteSecurityPasswordPrompt" xml:space="preserve">
+    <value>Introduce tu contraseña de seguridad.</value>
+  </data>
+  <data name="CharacterDeleteSecurityPasswordIncorrect" xml:space="preserve">
+    <value>La contraseña de seguridad es incorrecta.</value>
+  </data>
 </root>

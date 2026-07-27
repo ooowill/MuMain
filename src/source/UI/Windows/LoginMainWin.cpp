@@ -6,6 +6,7 @@
 #include "UI/Windows/LoginMainWin.h"
 
 #include "Core/Input/Input.h"
+#include "I18N/All.h"
 #include "UI/Legacy/UIMng.h"
 #include "Network/Server/WSclient.h"
 
@@ -32,14 +33,32 @@ CLoginMainWin::~CLoginMainWin()
 
 void CLoginMainWin::Create()
 {
-    for (int i = 0; i <= LMW_BTN_CREDIT; ++i)
-        m_aBtn[i].Create(54, 30, BITMAP_LOG_IN + 4 + i, 3, 2, 1);
-
+    constexpr int buttonWidth = 72;
+    constexpr int buttonHeight = 26;
+    constexpr int cornerInset = 68;
     CWin::Create(
-        CInput::Instance().GetScreenWidth() - 30 * 2,
-        m_aBtn[0].GetHeight(),
+        CInput::Instance().GetScreenWidth() - cornerInset * 2,
+        buttonHeight,
         -2
     );
+
+    const wchar_t* buttonText[LMW_BTN_MAX] =
+    {
+        I18N::Game::LoginMenu,
+        I18N::Game::LoginCredit,
+    };
+    DWORD buttonTextColors[4] =
+    {
+        ARGB(255, 210, 205, 198),
+        ARGB(255, 255, 213, 116),
+        ARGB(255, 255, 244, 210),
+        ARGB(255, 105, 102, 98),
+    };
+    for (int i = 0; i < LMW_BTN_MAX; ++i)
+    {
+        m_aBtn[i].CreateTextButton(buttonWidth, buttonHeight);
+        m_aBtn[i].SetText(buttonText[i], buttonTextColors);
+    }
 
     for (int i = 0; i < LMW_BTN_MAX; ++i)
         CWin::RegisterButton(&m_aBtn[i]);
@@ -54,35 +73,46 @@ void CLoginMainWin::PreRelease()
 
 void CLoginMainWin::SetPosition(int nXCoord, int nYCoord)
 {
-    CWin::SetPosition(nXCoord, nYCoord);
+    (void)nXCoord;
+    (void)nYCoord;
 
-    m_aBtn[LMW_BTN_MENU].SetPosition(nXCoord, nYCoord);
+    constexpr int cornerInset = 68;
+    constexpr int bottomInset = 30;
+    const int buttonY = CInput::Instance().GetScreenHeight()
+        - m_aBtn[LMW_BTN_MENU].GetHeight()
+        - bottomInset;
+
+    CWin::SetPosition(cornerInset, buttonY);
+
+    m_aBtn[LMW_BTN_MENU].SetPosition(cornerInset, buttonY);
 
     m_aBtn[LMW_BTN_CREDIT].SetPosition(
-        nXCoord + CWin::GetWidth() - m_aBtn[LMW_BTN_CREDIT].GetWidth(),
-        nYCoord
+        cornerInset + CWin::GetWidth() - m_aBtn[LMW_BTN_CREDIT].GetWidth(),
+        buttonY
     );
 
+    constexpr int decorationOffsetX = 55;
+    constexpr int decorationOffsetY = 10;
     m_sprDeco.SetPosition(
-        m_aBtn[LMW_BTN_CREDIT].GetXPos(),
-        m_aBtn[LMW_BTN_CREDIT].GetYPos()
+        m_aBtn[LMW_BTN_CREDIT].GetXPos() + decorationOffsetX,
+        m_aBtn[LMW_BTN_CREDIT].GetYPos() + decorationOffsetY
     );
 }
 
-void CLoginMainWin::Show(bool)
+void CLoginMainWin::Show(bool bShow)
 {
-    // Keep the Season 21 login scene clear of the legacy menu/credit chrome.
-    CWin::Show(false);
+
+    CWin::Show(bShow);
 
     for (int i = 0; i < LMW_BTN_MAX; ++i)
-        m_aBtn[i].Show(false);
+        m_aBtn[i].Show(bShow);
 
-    m_sprDeco.Show(false);
+    m_sprDeco.Show(bShow);
 }
 
-bool CLoginMainWin::CursorInWin(int)
+bool CLoginMainWin::CursorInWin(int nArea)
 {
-    return false;
+    return CWin::CursorInWin(nArea);
 }
 
 void CLoginMainWin::UpdateWhileActive(double dDeltaTick)

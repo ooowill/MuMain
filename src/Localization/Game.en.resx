@@ -12905,4 +12905,19 @@
   <data name="Retrying in seconds" xml:space="preserve">
     <value>Retrying in %d seconds...</value>
   </data>
+  <data name="LoginMenu" xml:space="preserve">
+    <value>Menu</value>
+  </data>
+  <data name="LoginCredit" xml:space="preserve">
+    <value>Credits</value>
+  </data>
+  <data name="BuyCharacterSlot" xml:space="preserve">
+    <value>Buy Slot</value>
+  </data>
+  <data name="CharacterDeleteSecurityPasswordPrompt" xml:space="preserve">
+    <value>Enter your security password.</value>
+  </data>
+  <data name="CharacterDeleteSecurityPasswordIncorrect" xml:space="preserve">
+    <value>The security password is incorrect.</value>
+  </data>
 </root>

@@ -17,6 +17,7 @@ class CCharSelMainWin : public CWin
 {
 protected:
     CButton m_aBtn[CSMW_BTN_MAX];
+    CSprite m_sprDeco;
     int m_scrollOffset;
     int m_pendingSelectionSlot;
     int m_scrollDragOffsetY;

@@ -12882,4 +12882,19 @@
     <value>Ebene: %u | Zurückgesetzt: %u</value>
     <comment>legacy_id=3810</comment>
   </data>
+  <data name="LoginMenu" xml:space="preserve">
+    <value>Menü</value>
+  </data>
+  <data name="LoginCredit" xml:space="preserve">
+    <value>Mitwirkende</value>
+  </data>
+  <data name="BuyCharacterSlot" xml:space="preserve">
+    <value>Slot kaufen</value>
+  </data>
+  <data name="CharacterDeleteSecurityPasswordPrompt" xml:space="preserve">
+    <value>Gib dein Sicherheitspasswort ein.</value>
+  </data>
+  <data name="CharacterDeleteSecurityPasswordIncorrect" xml:space="preserve">
+    <value>Das Sicherheitspasswort ist falsch.</value>
+  </data>
 </root>

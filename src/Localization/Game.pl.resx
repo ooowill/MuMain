@@ -12881,4 +12881,19 @@
     <value>Poziom: %u | Resetuje: %u</value>
     <comment>legacy_id=3810</comment>
   </data>
+  <data name="LoginMenu" xml:space="preserve">
+    <value>Menu</value>
+  </data>
+  <data name="LoginCredit" xml:space="preserve">
+    <value>Autorzy</value>
+  </data>
+  <data name="BuyCharacterSlot" xml:space="preserve">
+    <value>Kup slot</value>
+  </data>
+  <data name="CharacterDeleteSecurityPasswordPrompt" xml:space="preserve">
+    <value>Wpisz hasło bezpieczeństwa.</value>
+  </data>
+  <data name="CharacterDeleteSecurityPasswordIncorrect" xml:space="preserve">
+    <value>Hasło bezpieczeństwa jest nieprawidłowe.</value>
+  </data>
 </root>

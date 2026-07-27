@@ -51,7 +51,9 @@ namespace
     constexpr DWORD kReorderRequestTimeout = 5000;
     constexpr int kBottomScreenInset = 14;
     constexpr int kSideScreenInset = 22;
-    constexpr int kActionButtonGap = 1;
+    constexpr int kActionButtonWidth = 72;
+    constexpr int kActionButtonHeight = 26;
+    constexpr int kActionButtonGap = 6;
     constexpr int kBottomBarHeight = 28;
     constexpr int kBottomBarTopPadding = 3;
     constexpr float kPowerDigitAtlasCellWidth = 96.0f / 1024.0f;
@@ -466,15 +468,32 @@ CCharSelMainWin::~CCharSelMainWin()
 
 void CCharSelMainWin::Create()
 {
-    m_aBtn[CSMW_BTN_CREATE].Create(54, 30, BITMAP_LOG_IN + 3, 4, 2, 1, 3);
-    m_aBtn[CSMW_BTN_MENU].Create(54, 30, BITMAP_LOG_IN + 4, 3, 2, 1);
-    m_aBtn[CSMW_BTN_CONNECT].Create(54, 30, BITMAP_LOG_IN + 5, 4, 2, 1, 3);
-    m_aBtn[CSMW_BTN_DELETE].Create(54, 30, BITMAP_LOG_IN + 6, 4, 2, 1, 3);
-
     CWin::Create(kPanelWidth, kPanelHeight, -2);
+
+    const wchar_t* buttonText[CSMW_BTN_MAX] =
+    {
+        I18N::Game::Create,
+        I18N::Game::LoginMenu,
+        I18N::Game::Connect,
+        I18N::Game::Delete,
+    };
+    DWORD buttonTextColors[4] =
+    {
+        ARGB(255, 210, 205, 198),
+        ARGB(255, 255, 213, 116),
+        ARGB(255, 255, 244, 210),
+        ARGB(255, 105, 102, 98),
+    };
+    for (int i = 0; i < CSMW_BTN_MAX; ++i)
+    {
+        m_aBtn[i].CreateTextButton(kActionButtonWidth, kActionButtonHeight);
+        m_aBtn[i].SetText(buttonText[i], buttonTextColors);
+    }
+
     for (int i = 0; i < CSMW_BTN_MAX; ++i)
         CWin::RegisterButton(&m_aBtn[i]);
 
+    m_sprDeco.Create(189, 103, BITMAP_LOG_IN + 2, 0, nullptr, 105, 59);
     m_scrollDragging = false;
     m_createButtonPressed = false;
     g_reorderPending = false;
@@ -488,6 +507,7 @@ void CCharSelMainWin::Create()
 
 void CCharSelMainWin::PreRelease()
 {
+    m_sprDeco.Release();
 }
 
 void CCharSelMainWin::SetPosition(int nXCoord, int nYCoord)
@@ -510,6 +530,13 @@ void CCharSelMainWin::SetPosition(int nXCoord, int nYCoord)
     const int rightX = static_cast<int>(input.GetScreenWidth()) - kSideScreenInset;
     m_aBtn[CSMW_BTN_DELETE].SetPosition(rightX - buttonWidth, buttonY);
     m_aBtn[CSMW_BTN_CONNECT].SetPosition(rightX - (buttonWidth * 2 + kActionButtonGap), buttonY);
+
+    constexpr int decorationOffsetX = 9;
+    constexpr int decorationOffsetY = -6;
+    m_sprDeco.SetPosition(
+        m_aBtn[CSMW_BTN_DELETE].GetXPos() + decorationOffsetX,
+        m_aBtn[CSMW_BTN_DELETE].GetYPos() + decorationOffsetY
+    );
 }
 
 void CCharSelMainWin::Show(bool bShow)
@@ -517,6 +544,8 @@ void CCharSelMainWin::Show(bool bShow)
     CWin::Show(bShow);
     for (auto& button : m_aBtn)
         button.Show(bShow);
+
+    m_sprDeco.Show(bShow);
 
     if (!bShow)
     {
@@ -616,11 +645,29 @@ void CCharSelMainWin::UpdateWhileShow(double dDeltaTick)
         return;
     }
 
+    ActiveBtns(true);
+
     const bool createHovered = CursorInRect(
         m_aBtn[CSMW_BTN_CREATE].GetXPos(),
         m_aBtn[CSMW_BTN_CREATE].GetYPos(),
         m_aBtn[CSMW_BTN_CREATE].GetWidth(),
         m_aBtn[CSMW_BTN_CREATE].GetHeight());
+    const bool menuHovered = CursorInRect(
+        m_aBtn[CSMW_BTN_MENU].GetXPos(),
+        m_aBtn[CSMW_BTN_MENU].GetYPos(),
+        m_aBtn[CSMW_BTN_MENU].GetWidth(),
+        m_aBtn[CSMW_BTN_MENU].GetHeight());
+    const bool connectHovered = CursorInRect(
+        m_aBtn[CSMW_BTN_CONNECT].GetXPos(),
+        m_aBtn[CSMW_BTN_CONNECT].GetYPos(),
+        m_aBtn[CSMW_BTN_CONNECT].GetWidth(),
+        m_aBtn[CSMW_BTN_CONNECT].GetHeight());
+    const bool deleteHovered = CursorInRect(
+        m_aBtn[CSMW_BTN_DELETE].GetXPos(),
+        m_aBtn[CSMW_BTN_DELETE].GetYPos(),
+        m_aBtn[CSMW_BTN_DELETE].GetWidth(),
+        m_aBtn[CSMW_BTN_DELETE].GetHeight());
+
     const bool purchaseHovered = CursorInPurchaseSlotRow(
         GetXPos(),
         GetYPos(),
@@ -683,6 +730,31 @@ void CCharSelMainWin::UpdateWhileShow(double dDeltaTick)
         if (!m_aBtn[CSMW_BTN_CREATE].IsClick())
             ::PlayBuffer(SOUND_CLICK01);
         OpenCharacterCreationWindow();
+        return;
+    }
+
+    if (menuHovered)
+    {
+        if (!m_aBtn[CSMW_BTN_MENU].IsClick())
+            ::PlayBuffer(SOUND_CLICK01);
+        uiManager.ShowWin(&uiManager.m_SysMenuWin);
+        uiManager.SetSysMenuWinShow(true);
+        return;
+    }
+
+    if (connectHovered && HasValidSelectedCharacter())
+    {
+        if (!m_aBtn[CSMW_BTN_CONNECT].IsClick())
+            ::PlayBuffer(SOUND_CLICK01);
+        ::StartGame();
+        return;
+    }
+
+    if (deleteHovered && HasValidSelectedCharacter())
+    {
+        if (!m_aBtn[CSMW_BTN_DELETE].IsClick())
+            ::PlayBuffer(SOUND_CLICK01);
+        DeleteCharacter();
     }
 }
 
@@ -694,20 +766,6 @@ void CCharSelMainWin::UpdateWhileActive(double dDeltaTick)
     if (ApplyPendingSelection())
         return;
 
-    CUIMng& uiManager = CUIMng::Instance();
-    if (m_aBtn[CSMW_BTN_CONNECT].IsClick())
-    {
-        ::StartGame();
-    }
-    else if (m_aBtn[CSMW_BTN_MENU].IsClick())
-    {
-        uiManager.ShowWin(&uiManager.m_SysMenuWin);
-        uiManager.SetSysMenuWinShow(true);
-    }
-    else if (m_aBtn[CSMW_BTN_DELETE].IsClick())
-    {
-        DeleteCharacter();
-    }
 
     UpdateCharacterList();
 }
@@ -735,6 +793,7 @@ void CCharSelMainWin::RenderControls()
     ::EndRenderColor();
     ::DisableAlphaBlend();
 
+    m_sprDeco.Render();
     CWin::RenderButtons();
 }
 
@@ -861,7 +920,7 @@ void CCharSelMainWin::RenderCharacterList()
         {
             if (IsPurchaseSlotRow(accountSlot))
             {
-                RenderTextAt(listX - 6, rowY + 16, rowWidth, L"Comprar Slot", ARGB(255, 196, 188, 181), RT3_SORT_CENTER);
+                RenderTextAt(listX - 6, rowY + 16, rowWidth, I18N::Game::BuyCharacterSlot, ARGB(255, 196, 188, 181), RT3_SORT_CENTER);
             }
             else
             {

@@ -23,6 +23,86 @@ namespace
 constexpr float kDefaultTextOffset = 0.5f;
 constexpr float kPressedTextOffset = 1.5f;
 
+void FillButtonRect(int x, int y, int width, int height, BYTE red, BYTE green, BYTE blue, BYTE alpha)
+{
+    const float rateX = g_fScreenRate_x > 0.0f ? g_fScreenRate_x : 1.0f;
+    const float rateY = g_fScreenRate_y > 0.0f ? g_fScreenRate_y : 1.0f;
+    ::glColor4ub(red, green, blue, alpha);
+    ::RenderColor(
+        static_cast<float>(x) / rateX,
+        static_cast<float>(y) / rateY,
+        static_cast<float>(width) / rateX,
+        static_cast<float>(height) / rateY,
+        0.0f,
+        0);
+}
+
+void RenderTextButtonFrame(int x, int y, int width, int height, bool enabled, bool hovered, bool pressed)
+{
+    BYTE outerRed = 62;
+    BYTE outerGreen = 38;
+    BYTE outerBlue = 25;
+    BYTE innerRed = 48;
+    BYTE innerGreen = 27;
+    BYTE innerBlue = 17;
+    BYTE fillRed = 9;
+    BYTE fillGreen = 7;
+    BYTE fillBlue = 8;
+    BYTE topRed = 28;
+    BYTE topGreen = 16;
+    BYTE topBlue = 11;
+
+    if (!enabled)
+    {
+        outerRed = outerGreen = outerBlue = 54;
+        innerRed = innerGreen = innerBlue = 72;
+        fillRed = fillGreen = fillBlue = 18;
+        topRed = topGreen = topBlue = 31;
+    }
+    else if (pressed)
+    {
+        outerRed = 118;
+        outerGreen = 70;
+        outerBlue = 33;
+        innerRed = 54;
+        innerGreen = 30;
+        innerBlue = 17;
+        fillRed = 7;
+        fillGreen = 5;
+        fillBlue = 6;
+        topRed = 24;
+        topGreen = 13;
+        topBlue = 9;
+    }
+    else if (hovered)
+    {
+        outerRed = 176;
+        outerGreen = 98;
+        outerBlue = 41;
+        innerRed = 84;
+        innerGreen = 43;
+        innerBlue = 21;
+        fillRed = 28;
+        fillGreen = 12;
+        fillBlue = 9;
+        topRed = 72;
+        topGreen = 33;
+        topBlue = 16;
+    }
+
+    ::EnableAlphaBlend3();
+    FillButtonRect(x + 2, y + 2, width, height, 0, 0, 0, 145);
+    FillButtonRect(x, y, width, height, outerRed, outerGreen, outerBlue, enabled ? 215 : 170);
+    FillButtonRect(x + 1, y + 1, width - 2, height - 2, 8, 5, 5, 245);
+    FillButtonRect(x + 2, y + 2, width - 4, height - 4, innerRed, innerGreen, innerBlue, enabled ? 175 : 130);
+    FillButtonRect(x + 3, y + 3, width - 6, height - 6, fillRed, fillGreen, fillBlue, 228);
+    FillButtonRect(x + 4, y + 4, width - 8, 2, topRed, topGreen, topBlue, enabled ? 175 : 115);
+    FillButtonRect(x + 4, y + height - 5, width - 8, 1, 4, 3, 4, 230);
+    ::EndRenderColor();
+    ::DisableAlphaBlend();
+    ::glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+}
+
 bool IsValidStateIndex(int state)
 {
     return state >= 0 && state < BTN_IMG_MAX;
@@ -41,6 +121,7 @@ CButton::CButton()
     , m_bActive(true)
     , m_bClick(false)
     , m_bCheck(false)
+    , m_bProceduralStyle(false)
 {
     m_imageFrames.fill(-1);
 }
@@ -53,6 +134,7 @@ CButton::~CButton()
 void CButton::Release()
 {
     ReleaseText();
+    m_bProceduralStyle = false;
 }
 
 void CButton::Create(int nWidth, int nHeight, int nTexID, int nMaxFrame, int nDownFrame, int nActiveFrame, int nDisableFrame, int nCheckUpFrame, int nCheckDownFrame, int nCheckActiveFrame, int nCheckDisableFrame)
@@ -86,6 +168,12 @@ void CButton::Create(int nWidth, int nHeight, int nTexID, int nMaxFrame, int nDo
     m_bCheck = false;
     m_bEnable = true;
     m_bActive = true;
+}
+
+void CButton::CreateTextButton(int nWidth, int nHeight)
+{
+    Create(nWidth, nHeight, -1, 1, 0, 0, 0);
+    m_bProceduralStyle = true;
 }
 
 void CButton::Show(bool bShow)
@@ -192,13 +280,30 @@ void CButton::Render()
         }
     }
 
-    CSprite::Render();
+    if (m_bProceduralStyle)
+    {
+        const bool hovered = CursorInObject() != FALSE;
+        const bool pressed = hovered && m_pBtnHeld == this;
+        RenderTextButtonFrame(
+            CSprite::GetXPos(),
+            CSprite::GetYPos(),
+            CSprite::GetWidth(),
+            CSprite::GetHeight(),
+            m_bEnable,
+            hovered,
+            pressed);
+    }
+    else
+    {
+        CSprite::Render();
+    }
 
     if (m_text.empty())
     {
         return;
     }
 
+    ::EnableAlphaTest();
     g_pRenderText->SetTextColor(m_textColor);
     g_pRenderText->SetBgColor(0);
     g_pRenderText->SetFont(g_hFixFont);

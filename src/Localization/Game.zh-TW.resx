@@ -12881,4 +12881,19 @@
     <value>Level: %u | Resets: %u</value>
     <comment>legacy_id=3810</comment>
   </data>
+  <data name="LoginMenu" xml:space="preserve">
+    <value>選單</value>
+  </data>
+  <data name="LoginCredit" xml:space="preserve">
+    <value>製作人員</value>
+  </data>
+  <data name="BuyCharacterSlot" xml:space="preserve">
+    <value>購買角色欄位</value>
+  </data>
+  <data name="CharacterDeleteSecurityPasswordPrompt" xml:space="preserve">
+    <value>請輸入安全密碼。</value>
+  </data>
+  <data name="CharacterDeleteSecurityPasswordIncorrect" xml:space="preserve">
+    <value>安全密碼不正確。</value>
+  </data>
 </root>

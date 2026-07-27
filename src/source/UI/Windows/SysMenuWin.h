@@ -3,17 +3,17 @@
 #include "UI/Widgets/Win.h"
 #include "UI/Widgets/Button.h"
 
-#define	SMW_BTN_GAME_END	0
-#define	SMW_BTN_SERVER_SEL	1
-#define	SMW_BTN_OPTION		2
-#define	SMW_BTN_CLOSE		3
-#define	SMW_BTN_MAX			4
+#define SMW_BTN_GAME_END 0
+#define SMW_BTN_SERVER_SEL 1
+#define SMW_BTN_OPTION 2
+#define SMW_BTN_CLOSE 3
+#define SMW_BTN_MAX 4
 
 class CSysMenuWin : public CWin
 {
 protected:
     CWin m_winBack;
-    CButton		m_aBtn[SMW_BTN_MAX];
+    CButton m_aBtn[SMW_BTN_MAX];
 
 public:
     CSysMenuWin();
@@ -26,6 +26,6 @@ public:
 
 protected:
     void PreRelease();
-    void UpdateWhileActive(double dDeltaTick);
+    void UpdateWhileShow(double dDeltaTick);
     void RenderControls();
 };

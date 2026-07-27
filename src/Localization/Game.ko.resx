@@ -13,4 +13,19 @@
     <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
   </resheader>
   <!-- Korean locale enabled for Game. Missing keys fall back to Game.en.resx. -->
+  <data name="LoginMenu" xml:space="preserve">
+    <value>메뉴</value>
+  </data>
+  <data name="LoginCredit" xml:space="preserve">
+    <value>제작진</value>
+  </data>
+  <data name="BuyCharacterSlot" xml:space="preserve">
+    <value>슬롯 구매</value>
+  </data>
+  <data name="CharacterDeleteSecurityPasswordPrompt" xml:space="preserve">
+    <value>보안 비밀번호를 입력하세요.</value>
+  </data>
+  <data name="CharacterDeleteSecurityPasswordIncorrect" xml:space="preserve">
+    <value>보안 비밀번호가 올바르지 않습니다.</value>
+  </data>
 </root>

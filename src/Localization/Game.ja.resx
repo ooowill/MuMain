@@ -10959,4 +10959,19 @@
     <value>JEWELのご購入は、ウィンドウモ?ドでご利用いただくか、一度プログラムを終了してください。</value>
     <comment>legacy_id=3324</comment>
   </data>
+  <data name="LoginMenu" xml:space="preserve">
+    <value>メニュー</value>
+  </data>
+  <data name="LoginCredit" xml:space="preserve">
+    <value>クレジット</value>
+  </data>
+  <data name="BuyCharacterSlot" xml:space="preserve">
+    <value>スロット購入</value>
+  </data>
+  <data name="CharacterDeleteSecurityPasswordPrompt" xml:space="preserve">
+    <value>セキュリティパスワードを入力してください。</value>
+  </data>
+  <data name="CharacterDeleteSecurityPasswordIncorrect" xml:space="preserve">
+    <value>セキュリティパスワードが正しくありません。</value>
+  </data>
 </root>

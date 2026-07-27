@@ -3,26 +3,26 @@
 //*****************************************************************************
 #pragma once
 
-#include "UI/Widgets/WinEx.h"
+#include "UI/Widgets/Win.h"
 #include "UI/Widgets/Button.h"
-#include "UI/Widgets/Slider.h"
 
-#define	OW_BTN_AUTO_ATTACK		0
-#define	OW_BTN_WHISPER_ALARM	1
-#define	OW_BTN_SLIDE_HELP		2
-#define	OW_BTN_CLOSE			3
-#define	OW_BTN_MAX				4
-
-#define OW_SLD_EFFECT_VOL		0
-#define OW_SLD_RENDER_LV		1
-#define OW_SLD_MAX				2
+#define OW_BTN_BGM             0
+#define OW_BTN_MUTE            1
+#define OW_BTN_RENDER_5        2
+#define OW_BTN_RENDER_7        3
+#define OW_BTN_RENDER_9        4
+#define OW_BTN_RENDER_11       5
+#define OW_BTN_RENDER_13       6
+#define OW_BTN_CLOSE           7
+#define OW_BTN_MAX             8
 
 class COptionWin : public CWin
 {
 protected:
-    CWinEx		m_winBack;
-    CButton		m_aBtn[OW_BTN_MAX];
-    CSlider		m_aSlider[OW_SLD_MAX];
+    CWin m_winBack;
+    CButton m_aBtn[OW_BTN_MAX];
+    int m_lastSoundVolume{5};
+    int m_lastMusicVolume{5};
 
 public:
     COptionWin();
@@ -36,6 +36,11 @@ public:
 
 protected:
     void PreRelease();
-    void UpdateWhileActive(double dDeltaTick);
+    void UpdateWhileShow(double dDeltaTick);
     void RenderControls();
+
+private:
+    void ApplySoundVolume(int level);
+    void ApplyMusicEnabled(bool enabled);
+    void CloseWindow();
 };

@@ -334,6 +334,13 @@ void CreateObject(OBJECT* object)
     object->CollisionRange = -300.0f;
     object->LightEnable = true;
 
+    if (gMapManager.WorldActive == WD_73NEW_LOGIN_SCENE
+        && object->Type == 1
+        && object->Position[0] > 20000.0f)
+    {
+        object->Scale = 5.98f;
+    }
+
     if (gMapManager.WorldActive == WD_74NEW_CHARACTER_SCENE
         && object->Type >= 24
         && object->Type <= 26)
@@ -358,8 +365,10 @@ bool MoveObject(OBJECT* object)
         return true;
     }
 
+    // The foreground wake layers (types 7 and 18) already animate through
+    // their BMD bones. Scrolling their UVs exposes a hard wrap seam.
     const bool loginWater = gMapManager.WorldActive == WD_73NEW_LOGIN_SCENE
-        && (object->Type == 1 || object->Type == 7 || object->Type == 18);
+        && object->Type == 1;
     const bool characterWater = gMapManager.WorldActive == WD_74NEW_CHARACTER_SCENE
         && object->Type >= 24
         && object->Type <= 26;

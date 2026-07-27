@@ -12881,4 +12881,19 @@
     <value>Antas: %u | Ni-reset: %u</value>
     <comment>legacy_id=3810</comment>
   </data>
+  <data name="LoginMenu" xml:space="preserve">
+    <value>Menu</value>
+  </data>
+  <data name="LoginCredit" xml:space="preserve">
+    <value>Mga Kredito</value>
+  </data>
+  <data name="BuyCharacterSlot" xml:space="preserve">
+    <value>Bumili ng Slot</value>
+  </data>
+  <data name="CharacterDeleteSecurityPasswordPrompt" xml:space="preserve">
+    <value>Ilagay ang iyong security password.</value>
+  </data>
+  <data name="CharacterDeleteSecurityPasswordIncorrect" xml:space="preserve">
+    <value>Mali ang security password.</value>
+  </data>
 </root>

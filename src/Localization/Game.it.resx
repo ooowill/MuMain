@@ -13,4 +13,19 @@
     <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
   </resheader>
   <!-- Italian locale enabled for Game. Missing keys fall back to Game.en.resx. -->
+  <data name="LoginMenu" xml:space="preserve">
+    <value>Menu</value>
+  </data>
+  <data name="LoginCredit" xml:space="preserve">
+    <value>Crediti</value>
+  </data>
+  <data name="BuyCharacterSlot" xml:space="preserve">
+    <value>Acquista slot</value>
+  </data>
+  <data name="CharacterDeleteSecurityPasswordPrompt" xml:space="preserve">
+    <value>Inserisci la password di sicurezza.</value>
+  </data>
+  <data name="CharacterDeleteSecurityPasswordIncorrect" xml:space="preserve">
+    <value>La password di sicurezza non è corretta.</value>
+  </data>
 </root>

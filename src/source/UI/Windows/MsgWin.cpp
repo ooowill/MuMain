@@ -496,7 +496,7 @@ void CMsgWin::PopUp(int nMsgCode, wchar_t* pszMsg)
         eType = MWT_BTN_BOTH;
         break;
     case MESSAGE_DELETE_CHARACTER_RESIDENT:
-        lpszMsg = L"Digite a senha da sua conta.";
+        lpszMsg = I18N::Game::CharacterDeleteSecurityPasswordPrompt;
         eType = MWT_STR_INPUT;
         InitResidentNumInput();
         break;
@@ -504,7 +504,7 @@ void CMsgWin::PopUp(int nMsgCode, wchar_t* pszMsg)
         lpszMsg = I18N::Game::TheCharacterIsItemBlocked;
         break;
     case MESSAGE_STORAGE_RESIDENTWRONG:
-        lpszMsg = L"Senha da conta incorreta.";
+        lpszMsg = I18N::Game::CharacterDeleteSecurityPasswordIncorrect;
         break;
     case MESSAGE_DELETE_CHARACTER_SUCCESS:
         if (SelectedHero >= 0 && SelectedHero < AccountCharacterList::NativeVisibleSlots)
@@ -619,7 +619,7 @@ void CMsgWin::InitResidentNumInput()
     ::ClearInput();
     InputEnable = true;
     InputNumber = 1;
-    InputTextMax[0] = g_iLengthAuthorityCode;
+    InputTextMax[0] = 10;
     InputTextHide[0] = 1;
 
     if (g_iChatInputType == 1)
@@ -627,7 +627,7 @@ void CMsgWin::InitResidentNumInput()
         g_pSinglePasswdInputBox->SetState(UISTATE_NORMAL);
         g_pSinglePasswdInputBox->SetOption(UIOPTION_NULL);
         g_pSinglePasswdInputBox->SetBackColor(0, 0, 0, 0);
-        g_pSinglePasswdInputBox->SetTextLimit(20);
+        g_pSinglePasswdInputBox->SetTextLimit(10);
         g_pSinglePasswdInputBox->GiveFocus();
     }
 }

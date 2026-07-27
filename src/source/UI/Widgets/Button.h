@@ -26,6 +26,7 @@ protected:
     bool	m_bActive;
     bool	m_bClick;
     bool	m_bCheck;
+    bool	m_bProceduralStyle;
 
     std::array<int, BTN_IMG_MAX> m_imageFrames{};
     std::wstring m_text;
@@ -41,6 +42,7 @@ public:
 
     void Release();
     void Create(int nWidth, int nHeight, int nTexID, int nMaxFrame = 1, int nDownFrame = -1, int nActiveFrame = -1, int nDisableFrame = -1, int nCheckUpFrame = -1, int nCheckDownFrame = -1, int nCheckActiveFrame = -1, int nCheckDisableFrame = -1);
+    void CreateTextButton(int nWidth, int nHeight);
     void Update();
     void Render();
     void Show(bool bShow = true);

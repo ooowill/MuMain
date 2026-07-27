@@ -12881,4 +12881,19 @@
     <value>Уровень: %u | Сбрасывает: %u</value>
     <comment>legacy_id=3810</comment>
   </data>
+  <data name="LoginMenu" xml:space="preserve">
+    <value>Меню</value>
+  </data>
+  <data name="LoginCredit" xml:space="preserve">
+    <value>Авторы</value>
+  </data>
+  <data name="BuyCharacterSlot" xml:space="preserve">
+    <value>Купить слот</value>
+  </data>
+  <data name="CharacterDeleteSecurityPasswordPrompt" xml:space="preserve">
+    <value>Введите пароль безопасности.</value>
+  </data>
+  <data name="CharacterDeleteSecurityPasswordIncorrect" xml:space="preserve">
+    <value>Неверный пароль безопасности.</value>
+  </data>
 </root>
